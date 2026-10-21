@@ -1,0 +1,44 @@
+# Production override, used on the Airflow EC2 instance:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Uses the image published to ECR, real S3 and RDS; local-only services
+# (lake, warehouse-db, migrate) are not started. Values come from /opt/energia-data/.env,
+# written by the instance from Secrets Manager (see energia-infra).
+
+x-prod-env: &prod-env
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+  LAKE_S3_ENDPOINT_URL: ""
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+  AWS_DEFAULT_REGION: sa-east-1
+  LAKE_BUCKET: ${LAKE_BUCKET:?set LAKE_BUCKET}
+  WAREHOUSE_DSN: ${WAREHOUSE_DSN:?set WAREHOUSE_DSN}
+  API_URL: ${API_URL:?set API_URL}
+
+services:
+  airflow-init:
+    image: ${ECR_IMAGE:?set ECR_IMAGE}
+    environment: *prod-env
+  airflow-apiserver:
+    image: ${ECR_IMAGE}
+    environment: *prod-env
+    # Reached only through SSM port forwarding.
+    ports: !reset ["127.0.0.1:8080:8080"]
+  airflow-scheduler:
+    image: ${ECR_IMAGE}
+    environment: *prod-env
+    depends_on: !reset
+      airflow-db:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+  airflow-dag-processor:
+    image: ${ECR_IMAGE}
+    environment: *prod-env
+  lake:
+    profiles: ["local"]
+  warehouse-db:
+    profiles: ["local"]
+  migrate:
+    profiles: ["local"]

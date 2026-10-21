@@ -1,0 +1,4 @@
+# Yearly PLD floor and hourly ceiling (R$/MWh), set by ANEEL resolutions.
+# Fill one row per year from the official resolution, citing it in "reference".
+# Years without a row are priced at the unbounded CMO (price_basis = 'CMO').
+year,pld_min,pld_max_hourly,reference

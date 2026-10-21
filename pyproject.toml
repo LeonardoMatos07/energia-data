@@ -1,0 +1,58 @@
+[project]
+name = "energia-data"
+version = "0.1.0"
+description = "Pipelines de dados da plataforma: ingestão do ONS, data lake e carga dos agregados"
+readme = "README.md"
+requires-python = ">=3.12"
+# Runtime dependencies installed on top of the Airflow image.
+dependencies = ["polars==1.20.0"]
+
+[project.optional-dependencies]
+# Shipped by the Airflow image; needed to run the CLI outside it.
+local = [
+    "boto3==1.36.0",
+    "psycopg2-binary==2.9.10",
+    "requests==2.32.3",
+]
+
+[dependency-groups]
+dev = [
+    "mypy==1.14.1",
+    "pytest==8.3.4",
+    "ruff==0.9.6",
+    "types-psycopg2==2.9.21.20241019",
+    "types-requests==2.32.0.20241016",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["energy_pipeline"]
+
+[tool.mypy]
+files = ["src"]
+python_version = "3.12"
+mypy_path = "src"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+ignore_missing_imports = true

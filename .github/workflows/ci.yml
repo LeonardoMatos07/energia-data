@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+      - run: uv sync --frozen --extra local
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Types
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest -v
+
+  image:
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Airflow image
+        run: docker build -t energia-data:ci .
+      - name: Check that the DAGs import cleanly
+        run: |
+          for dag in ons_grid_pipeline ons_curtailment_pipeline; do
+            docker run --rm -e CONNECTION_CHECK_MAX_COUNT=0 \
+              -v "$PWD/dags:/opt/airflow/dags" energia-data:ci \
+              python "/opt/airflow/dags/$dag.py"
+          done
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: image
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: sa-east-1
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push to ECR
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/energia-data
+        run: |
+          docker build -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" .
+          docker push --all-tags "$IMAGE"
+      - name: Deploy to the Airflow instance (SSM)
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ vars.AIRFLOW_INSTANCE_ID }}" \
+            --document-name AWS-RunShellScript \
+            --comment "energia-data ${GITHUB_SHA}" \
+            --parameters 'commands=["cd /opt/energia-data && ./deploy.sh '"${GITHUB_SHA}"'"]'

@@ -1,0 +1,193 @@
+# Local stack: Airflow 3 (LocalExecutor) + S3-compatible lake + PostgreSQL warehouse.
+# Based on the official Airflow docker-compose, trimmed down for a single machine.
+# The warehouse schema belongs to energia-api: the `migrate` service runs its
+# Alembic migrations, so ../energia-api must exist next to this repository.
+
+name: energia-data
+
+x-airflow-common: &airflow-common
+  build: .
+  image: energia-data/airflow:latest
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-local-dev-jwt-secret-change-me}
+    AIRFLOW__API_AUTH__JWT_ISSUER: airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
+    # Pipeline settings (see src/energy_pipeline/config.py)
+    PIPELINE_START_DATE: ${PIPELINE_START_DATE:-2025-01-01}
+    REPROCESS_MONTHS: ${REPROCESS_MONTHS:-3}
+    RECONCILIATION_TOLERANCE: ${RECONCILIATION_TOLERANCE:-0.01}
+    LAKE_BUCKET: ${LAKE_BUCKET:-energy-lake}
+    LAKE_S3_ENDPOINT_URL: http://lake:8333
+    AWS_ACCESS_KEY_ID: ${LAKE_ACCESS_KEY:-lakeadmin}
+    AWS_SECRET_ACCESS_KEY: ${LAKE_SECRET_KEY:-lakesecret}
+    AWS_DEFAULT_REGION: us-east-1
+    WAREHOUSE_DSN: postgresql://${WAREHOUSE_USER:-warehouse}:${WAREHOUSE_PASSWORD:-warehouse}@warehouse-db:5432/${WAREHOUSE_DB:-warehouse}
+    # Portal revalidation through energia-api (running on the host, port 8000).
+    API_URL: ${API_URL:-http://host.docker.internal:8000}
+    COGNITO_TOKEN_URL: ${COGNITO_TOKEN_URL:-}
+    DATA_CLIENT_ID: ${DATA_CLIENT_ID:-}
+    DATA_CLIENT_SECRET: ${DATA_CLIENT_SECRET:-}
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    airflow-db:
+      condition: service_healthy
+
+services:
+  # --- Storage ---------------------------------------------------------------
+
+  airflow-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  warehouse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${WAREHOUSE_USER:-warehouse}
+      POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+      POSTGRES_DB: ${WAREHOUSE_DB:-warehouse}
+    ports:
+      - "5433:5432"
+    volumes:
+      - warehouse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${WAREHOUSE_USER:-warehouse}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # S3-compatible object store (SeaweedFS) standing in for AWS S3.
+  # S3 API on :8333, file browser on :8888.
+  lake:
+    image: chrislusf/seaweedfs:4.48
+    entrypoint: weed
+    command: >
+      server -dir=/data -ip=lake -ip.bind=0.0.0.0
+      -master.volumeSizeLimitMB=1024 -volume.max=0
+      -s3 -s3.port=8333
+    environment:
+      AWS_ACCESS_KEY_ID: ${LAKE_ACCESS_KEY:-lakeadmin}
+      AWS_SECRET_ACCESS_KEY: ${LAKE_SECRET_KEY:-lakesecret}
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+    volumes:
+      - lake-data:/data
+    restart: always
+
+  # Creates/updates the warehouse tables with energia-api's Alembic migrations.
+  migrate:
+    build: ../energia-api
+    image: energia-api:local
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      AMBIENTE: local
+      DATABASE_URL: postgresql+psycopg://${WAREHOUSE_USER:-warehouse}:${WAREHOUSE_PASSWORD:-warehouse}@warehouse-db:5432/${WAREHOUSE_DB:-warehouse}
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+
+  # --- Airflow -----------------------------------------------------------------
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/config
+        /entrypoint airflow version
+        /entrypoint airflow config list > /dev/null
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/logs /opt/airflow/config
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-airflow}
+    user: "0:0"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # With the LocalExecutor, tasks run inside the scheduler container.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      lake:
+        condition: service_started
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow-db-data:
+  warehouse-db-data:
+  lake-data:
