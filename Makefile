@@ -1,4 +1,4 @@
-.PHONY: up down clean logs psql dag-errors backfill reprocess sync test lint format types check
+.PHONY: up down clean logs psql dag-errors backfill reprocess reconcile sync test lint format types check
 
 up:
 	docker compose up -d --build
@@ -25,6 +25,9 @@ backfill:
 reprocess:
 	docker compose exec airflow-scheduler airflow dags trigger ons_curtailment_pipeline \
 		--conf '{"month": "$(MONTH)"}'
+
+reconcile:
+	docker compose exec airflow-scheduler python -m energy_pipeline.reconcile --from $(FROM) --to $(TO)
 
 sync:
 	uv sync --extra local

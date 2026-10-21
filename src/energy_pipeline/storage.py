@@ -43,6 +43,16 @@ class Lake:
                 return None
             raise
 
+    def latest_key(self, prefix: str, file_name: str) -> str | None:
+        keys = []
+        for page in self._s3.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix
+        ):
+            keys += [
+                item["Key"] for item in page.get("Contents", []) if item["Key"].endswith(file_name)
+            ]
+        return max(keys) if keys else None
+
     def download_file(self, key: str, path: Path) -> None:
         self._s3.download_file(self.bucket, key, str(path))
 

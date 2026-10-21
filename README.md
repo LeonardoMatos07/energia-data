@@ -156,6 +156,14 @@ make backfill FROM=2023-01 TO=2026-09
 
 Copying `.env.example` is optional.
 
+After a backfill, reconcile what was published against the raw ONS files:
+
+```bash
+make reconcile FROM=2021-10 TO=2026-09
+```
+
+It sums the official non-realized generation (GNRa) of every month from the bronze files and compares it with the totals published per subsystem, state and plant. It exits with an error if any deviation exceeds `RECONCILIATION_TOLERANCE` (1% by default).
+
 | Service | Address | Credentials |
 |---|---|---|
 | Airflow | http://localhost:8080 | `airflow` / `airflow` |
