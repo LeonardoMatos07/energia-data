@@ -9,7 +9,7 @@ import requests
 
 from energy_pipeline.config import Settings
 from energy_pipeline.notify import machine_token
-from energy_pipeline.period import Period
+from energy_pipeline.period import Period, periods_between
 from energy_pipeline.warehouse import Warehouse
 
 MONTH_NAMES = [
@@ -377,20 +377,36 @@ def submit(settings: Settings, report: Report, publish: bool) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="energy_pipeline.report")
-    parser.add_argument("--month", type=Period.parse, required=True)
-    parser.add_argument("--submit", action="store_true", help="save the report through the API")
-    parser.add_argument("--publish", action="store_true", help="make the submitted report public")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--month", type=Period.parse, help="single month, YYYY-MM")
+    group.add_argument("--from", dest="first", type=Period.parse, help="first month, YYYY-MM")
+    parser.add_argument("--to", dest="last", type=Period.parse, help="last month, YYYY-MM")
+    parser.add_argument("--submit", action="store_true", help="save the reports through the API")
+    parser.add_argument("--publish", action="store_true", help="make the submitted reports public")
     parser.add_argument("--site-url", default="http://localhost:3000")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
     settings = Settings.from_env()
-    report = build_report(fetch_report_data(settings, args.month))
-    print(f"# {report.title}\n\n_{report.summary}_\n\n{report.content}")
-    print("--- LinkedIn ---\n" + linkedin_post(report, args.site_url))
-    if args.submit:
-        saved = submit(settings, report, args.publish)
-        print(f"saved {saved['slug']} (published_at={saved['published_at']})")
+    if args.first:
+        if not args.last:
+            parser.error("--from requires --to")
+        periods = periods_between(args.first, args.last)
+    else:
+        periods = [args.month]
+
+    for period in periods:
+        try:
+            report = build_report(fetch_report_data(settings, period))
+        except LookupError as error:
+            print(f"skipped {period}: {error}")
+            continue
+        if len(periods) == 1:
+            print(f"# {report.title}\n\n_{report.summary}_\n\n{report.content}")
+            print("--- LinkedIn ---\n" + linkedin_post(report, args.site_url))
+        if args.submit:
+            saved = submit(settings, report, args.publish)
+            print(f"saved {saved['slug']} (published_at={saved['published_at']})")
 
 
 if __name__ == "__main__":

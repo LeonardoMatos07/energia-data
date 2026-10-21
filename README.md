@@ -170,6 +170,8 @@ Generate the monthly report from the published data (a draft unless `--publish` 
 python -m energy_pipeline.report --month 2026-09 --submit
 ```
 
+To generate every month at once, use `--from 2021-10 --to 2026-09` instead of `--month`.
+
 It prints the Markdown report and a LinkedIn post, and with `--submit` saves it through `POST /v1/admin/reports` (needs `API_URL`).
 
 | Service | Address | Credentials |
