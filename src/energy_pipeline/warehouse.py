@@ -1,9 +1,3 @@
-"""PostgreSQL writes: idempotent bulk loads via COPY and the load log.
-
-The schema belongs to energia-api (Alembic migrations). This module never
-creates tables: it checks that they exist and only writes to them.
-"""
-
 from __future__ import annotations
 
 import io
@@ -20,18 +14,17 @@ from psycopg2 import sql
 
 log = logging.getLogger(__name__)
 
-# Tables written by this pipeline (see energia-api/docs/contrato-fase1.md).
 REQUIRED_TABLES = [
-    "usina",
-    "curtailment_mensal_usina",
-    "curtailment_mensal_uf",
-    "curtailment_mensal_sin",
-    "carga_execucao",
+    "plant",
+    "plant_monthly_curtailment",
+    "state_monthly_curtailment",
+    "subsystem_monthly_curtailment",
+    "load_run",
 ]
 
 
 class SchemaNotReadyError(RuntimeError):
-    """The tables owned by energia-api were not created yet."""
+    pass
 
 
 def _table(name: str) -> sql.Composable:
@@ -43,8 +36,6 @@ def _columns(names: Sequence[str]) -> sql.Composable:
 
 
 class Session:
-    """Operations that run inside a single database transaction."""
-
     _stage_ids = itertools.count()
 
     def __init__(self, cursor: Any) -> None:
@@ -69,10 +60,6 @@ class Session:
         start: date | datetime,
         end: date | datetime,
     ) -> int:
-        """Delete rows of ``table`` where ``start <= column < end`` and insert ``df``.
-
-        Re-running a period therefore never duplicates data.
-        """
         stage = self._stage(table, df)
         self.execute(
             sql.SQL("DELETE FROM {} WHERE {} >= %s AND {} < %s").format(
@@ -91,9 +78,8 @@ class Session:
         df: pl.DataFrame,
         *,
         keys: Sequence[str],
-        touch_column: str | None = "atualizado_em",
+        touch_column: str | None = "updated_at",
     ) -> int:
-        """Insert or update by ``keys``; ``touch_column`` is set to now() on update."""
         stage = self._stage(table, df)
         assignments = [
             sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(column))
@@ -118,7 +104,6 @@ class Session:
         return df.height
 
     def _stage(self, table: str, df: pl.DataFrame) -> str:
-        """COPY ``df`` into a temporary table shaped like ``table``."""
         stage = f"stage_{next(self._stage_ids)}"
         self.execute(
             sql.SQL("CREATE TEMP TABLE {} (LIKE {} INCLUDING DEFAULTS) ON COMMIT DROP").format(
@@ -155,7 +140,6 @@ class Warehouse:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        """Open a transaction that commits on success and rolls back on error."""
         connection = psycopg2.connect(self.dsn)
         try:
             with connection, connection.cursor() as cursor:
@@ -190,11 +174,11 @@ class Warehouse:
         rows: int | None = None,
         detail: str | None = None,
     ) -> None:
-        """One row in ``carga_execucao`` (shown in the admin area)."""
         with self.session() as session:
             session.execute(
-                "INSERT INTO carga_execucao "
-                "(dataset, periodo, arquivo, hash, linhas, inicio, fim, status, detalhe) "
+                "INSERT INTO load_run "
+                "(dataset, period, source_file, checksum, row_count, started_at, finished_at, "
+                "status, detail) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     dataset,

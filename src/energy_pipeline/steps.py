@@ -1,18 +1,3 @@
-"""Pipeline steps, independent of the orchestrator.
-
-Per source and month: ``extract -> transform -> validate -> record``. Each step
-receives and returns a *manifest*: a small JSON-serializable dict describing
-where the data currently lives (Airflow passes it through XCom). Then, per month,
-``publish`` builds the aggregates the portal reads and loads them into Postgres.
-
-Lake layout::
-
-    bronze/ons/<source>/<partition>/<original file>     raw file, as published
-    prata/<source>/<partition>/data.parquet             standardized (and modeled)
-    ouro/<table>/year=YYYY/month=MM/data.parquet        same aggregates as Postgres
-    quarantine/<source>/<partition>/rejected.parquet    rows that failed parsing
-"""
-
 from __future__ import annotations
 
 import logging
@@ -23,7 +8,7 @@ from typing import Any
 
 import polars as pl
 
-from energy_pipeline import curtailment, extract, notify, publish, quality, transform
+from energy_pipeline import curtailment, extract, notify, publish, quality, schema, transform
 from energy_pipeline.config import Settings
 from energy_pipeline.period import Period
 from energy_pipeline.sources import (
@@ -50,7 +35,7 @@ CLUSTER_OF_PLANT_SOURCE = {
     WIND_PLANT_CURTAILMENT.name: WIND_CLUSTER_CURTAILMENT.name,
     SOLAR_PLANT_CURTAILMENT.name: SOLAR_CLUSTER_CURTAILMENT.name,
 }
-CAPACITY_LATEST_KEY = f"prata/{GENERATION_CAPACITY.name}/latest/data.parquet"
+CAPACITY_LATEST_KEY = f"silver/{GENERATION_CAPACITY.name}/latest/data.parquet"
 LOCAL_TIMEZONE = "America/Sao_Paulo"
 
 
@@ -75,13 +60,9 @@ def prepare_infrastructure(settings: Settings) -> None:
     Warehouse(settings.warehouse_dsn).check_schema()
 
 
-# --- Extract --------------------------------------------------------------------
-
-
 def run_extract(
     source_name: str, period: Period, settings: Settings, snapshot_date: date | None = None
 ) -> Manifest:
-    """Copy the published file to bronze, unless ONS has not changed it since last time."""
     started_at = _now()
     source = SOURCES[source_name]
     snapshot_date = snapshot_date or started_at.date()
@@ -118,9 +99,6 @@ def run_extract(
     }
 
 
-# --- Transform: standardize and model (prata) ------------------------------------
-
-
 def _standardize(
     source: Source, raw: pl.DataFrame, period: Period, snapshot_date: date
 ) -> transform.TransformResult:
@@ -142,7 +120,6 @@ def _standardize(
 
 
 def _with_utc(df: pl.DataFrame) -> pl.DataFrame:
-    """ONS publishes Brasilia local time; keep both local and UTC timestamps."""
     if "measured_at" not in df.columns:
         return df
     return df.with_columns(
@@ -155,14 +132,13 @@ def _with_utc(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def _model(source: Source, standardized: pl.DataFrame, period: Period, lake: Lake) -> pl.DataFrame:
-    """Curtailment sources are enriched with the outputs of their dependencies."""
     if source.name in CLUSTER_SOURCES:
-        marginal_cost = lake.read_parquet(_monthly_key("prata", MARGINAL_COST.name, period))
+        marginal_cost = lake.read_parquet(_monthly_key("silver", MARGINAL_COST.name, period))
         prices = curtailment.price_series(marginal_cost, curtailment.load_pld_limits(), period)
         return curtailment.enrich_clusters(standardized, prices)
     if source.name in CLUSTER_OF_PLANT_SOURCE:
         clusters = lake.read_parquet(
-            _monthly_key("prata", CLUSTER_OF_PLANT_SOURCE[source.name], period)
+            _monthly_key("silver", CLUSTER_OF_PLANT_SOURCE[source.name], period)
         )
         return curtailment.allocate_to_plants(standardized, clusters)
     return standardized
@@ -179,12 +155,13 @@ def run_transform(manifest: Manifest, settings: Settings) -> Manifest:
         lake.download_file(manifest["bronze_key"], path)
         raw = transform.read_raw(path, source.file_format)
 
+    schema.check_schema(source.name, raw)
     result = _standardize(source, raw, period, snapshot_date)
-    prata = _model(source, _with_utc(result.valid), period, lake)
-    prata_key = _layer_key("prata", source.name, manifest["partition"])
-    lake.write_parquet(prata, prata_key)
+    silver = _model(source, _with_utc(result.valid), period, lake)
+    silver_key = _layer_key("silver", source.name, manifest["partition"])
+    lake.write_parquet(silver, silver_key)
     if source.name == GENERATION_CAPACITY.name:
-        lake.write_parquet(prata, CAPACITY_LATEST_KEY)
+        lake.write_parquet(silver, CAPACITY_LATEST_KEY)
 
     quarantine_key = None
     if result.rejected.height:
@@ -195,16 +172,13 @@ def run_transform(manifest: Manifest, settings: Settings) -> Manifest:
     return {
         **manifest,
         "raw_rows": raw.height,
-        "prata_key": prata_key,
-        "prata_rows": prata.height,
+        "silver_key": silver_key,
+        "silver_rows": silver.height,
         "rejected_rows": result.rejected.height,
         "quarantine_key": quarantine_key,
         "duplicates_removed": result.duplicates_removed,
         "missing_measurements": result.missing_measurements,
     }
-
-
-# --- Validate and record -----------------------------------------------------------
 
 
 def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
@@ -213,7 +187,7 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
     period = Period.parse(manifest["period"])
     rejected = manifest["rejected_rows"]
     max_rejected = settings.max_rejected_ratio
-    df = lake.read_parquet(manifest["prata_key"])
+    df = lake.read_parquet(manifest["silver_key"])
     extra: Manifest = {}
 
     if source_name == LOAD_CURVE.name:
@@ -230,7 +204,7 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
         results = quality.cluster_curtailment_checks(df, period, rejected, max_rejected)
     elif source_name in CLUSTER_OF_PLANT_SOURCE:
         clusters = lake.read_parquet(
-            _monthly_key("prata", CLUSTER_OF_PLANT_SOURCE[source_name], period)
+            _monthly_key("silver", CLUSTER_OF_PLANT_SOURCE[source_name], period)
         )
         extra["reconciliation"] = curtailment.reconcile(df, clusters)
         results = quality.plant_curtailment_checks(
@@ -250,16 +224,15 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
 
 
 def run_record(manifest: Manifest, settings: Settings) -> Manifest:
-    """Log the successful load of a source and month in ``carga_execucao``."""
     Warehouse(settings.warehouse_dsn).record_load(
         dataset=manifest["source"],
-        status="sucesso",
+        status="success",
         started_at=datetime.fromisoformat(manifest["started_at"]),
         finished_at=_now(),
         period=Period.parse(manifest["period"]).start.date(),
         source_file=manifest["source_url"],
         checksum=manifest["sha256"],
-        rows=manifest["prata_rows"],
+        rows=manifest["silver_rows"],
         detail="\n".join(manifest["quality_warnings"]) or None,
     )
     return manifest
@@ -267,16 +240,13 @@ def run_record(manifest: Manifest, settings: Settings) -> Manifest:
 
 def record_failure(settings: Settings, dataset: str, detail: str) -> None:
     Warehouse(settings.warehouse_dsn).record_load(
-        dataset=dataset, status="falha", started_at=_now(), finished_at=_now(), detail=detail
+        dataset=dataset, status="failed", started_at=_now(), finished_at=_now(), detail=detail
     )
-
-
-# --- Publish (ouro) ----------------------------------------------------------------
 
 
 def _read_curtailment(lake: Lake, period: Period, names: list[str]) -> pl.DataFrame | None:
     frames = [
-        lake.read_parquet(_monthly_key("prata", name, period))
+        lake.read_parquet(_monthly_key("silver", name, period))
         for name in names
         if period in SOURCES[name].periods_to_process([period])
     ]
@@ -284,7 +254,6 @@ def _read_curtailment(lake: Lake, period: Period, names: list[str]) -> pl.DataFr
 
 
 def run_publish(period: Period, settings: Settings) -> Manifest:
-    """Build the month's aggregates, write them to the lake and load Postgres."""
     started_at = _now()
     lake = _lake(settings)
     clusters = _read_curtailment(lake, period, sorted(CLUSTER_SOURCES))
@@ -297,27 +266,34 @@ def run_publish(period: Period, settings: Settings) -> Manifest:
 
     tables = publish.build_monthly_tables(period, clusters, plants, capacity)
     outputs = {
-        "usina": tables.usina,
-        "curtailment_mensal_usina": tables.mensal_usina,
-        "curtailment_mensal_uf": tables.mensal_uf,
-        "curtailment_mensal_sin": tables.mensal_sin,
+        "plant": tables.plant,
+        "plant_monthly_curtailment": tables.plant_monthly,
+        "state_monthly_curtailment": tables.state_monthly,
+        "subsystem_monthly_curtailment": tables.subsystem_monthly,
     }
     for name, df in outputs.items():
-        lake.write_parquet(df, _monthly_key("ouro", name, period))
+        lake.write_parquet(df, _monthly_key("gold", name, period))
 
     with Warehouse(settings.warehouse_dsn).session() as session:
-        # Clusters first: plants reference them through conjunto_id.
-        for kind in ("conjunto", "usina"):
-            session.upsert("usina", tables.usina.filter(pl.col("tipo") == kind), keys=["id"])
-        for name in ("curtailment_mensal_usina", "curtailment_mensal_uf", "curtailment_mensal_sin"):
+        for kind in ("cluster", "plant"):
+            session.upsert("plant", tables.plant.filter(pl.col("kind") == kind), keys=["id"])
+        for name in (
+            "plant_monthly_curtailment",
+            "state_monthly_curtailment",
+            "subsystem_monthly_curtailment",
+        ):
             session.replace_range(
-                name, outputs[name], column="mes", start=period.start.date(), end=period.end.date()
+                name,
+                outputs[name],
+                column="month",
+                start=period.start.date(),
+                end=period.end.date(),
             )
 
     rows = {name: df.height for name, df in outputs.items()}
     Warehouse(settings.warehouse_dsn).record_load(
-        dataset="agregados",
-        status="sucesso",
+        dataset="aggregates",
+        status="success",
         started_at=started_at,
         finished_at=_now(),
         period=period.start.date(),

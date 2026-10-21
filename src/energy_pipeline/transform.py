@@ -1,10 +1,3 @@
-"""Standardization of raw ONS files (bronze) into typed, clean tables (silver).
-
-Raw files are read with every column as text so that no value is silently
-coerced; each column is then parsed explicitly. Rows that cannot be parsed
-are returned separately so they can be quarantined instead of dropped.
-"""
-
 from __future__ import annotations
 
 import unicodedata
@@ -30,7 +23,6 @@ SOURCE_TYPES = {
 RENEWABLE_SOURCE_TYPES = ["HYDRO", "WIND", "SOLAR"]
 RENEWABLE_FUEL_PATTERN = "BIOMASSA|BAGACO|BIOGAS"
 
-# ONS uses "-" as a placeholder for "not applicable" in text columns.
 _NULL_MARKERS = ["", "-"]
 _TIMESTAMP_FORMATS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"]
 
@@ -44,18 +36,11 @@ class TransformResult:
 
 
 def read_raw_csv(path: Path) -> pl.DataFrame:
-    """Read an ONS CSV keeping every column as text."""
     df = pl.read_csv(path, separator=";", infer_schema_length=0, encoding="utf8-lossy")
-    # Guard against a UTF-8 BOM or stray spaces in the header row.
     return df.rename({column: column.lstrip("﻿").strip().lower() for column in df.columns})
 
 
 def read_raw_parquet(path: Path) -> pl.DataFrame:
-    """Read an ONS Parquet file and render it as text, like a CSV.
-
-    ONS Parquet files are typed, but types are not guaranteed across months.
-    Rendering to text lets every source go through the same explicit parsers.
-    """
     df = pl.read_parquet(path)
     df = df.with_columns(
         pl.col(pl.Datetime).dt.strftime(_TIMESTAMP_FORMATS[0]),
@@ -68,11 +53,7 @@ def read_raw(path: Path, file_format: str) -> pl.DataFrame:
     return read_raw_parquet(path) if file_format == "parquet" else read_raw_csv(path)
 
 
-# --- Column parsers ---------------------------------------------------------
-
-
 def clean_text(column: str) -> pl.Expr:
-    """Trim, collapse inner whitespace and turn empty/placeholder values into nulls."""
     value = pl.col(column).str.strip_chars().str.replace_all(r"\s+", " ")
     return pl.when(value.is_in(_NULL_MARKERS)).then(None).otherwise(value)
 
@@ -82,7 +63,6 @@ def parse_code(column: str) -> pl.Expr:
 
 
 def parse_float(column: str) -> pl.Expr:
-    # Handles "6539.56000000", "0E-8" and a possible decimal comma.
     return clean_text(column).str.replace(",", ".", literal=True).cast(pl.Float64, strict=False)
 
 
@@ -103,7 +83,6 @@ def parse_date(column: str) -> pl.Expr:
 
 
 def normalize_label(value: str | None) -> str | None:
-    """'  Hidroelétrica ' -> 'HIDROELETRICA'. Used for categorical columns."""
     if value is None:
         return None
     ascii_value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
@@ -111,7 +90,6 @@ def normalize_label(value: str | None) -> str | None:
 
 
 def normalize_labels(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
-    """Apply :func:`normalize_label` to the distinct values of each column only."""
     expressions = []
     for column in columns:
         mapping = {value: normalize_label(value) for value in df[column].unique().drop_nulls()}
@@ -124,7 +102,6 @@ def normalize_labels(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
 
 
 def with_source_type(df: pl.DataFrame, column: str) -> pl.DataFrame:
-    """Map the ONS plant type (already normalized) to an English source type."""
     return df.with_columns(
         pl.col(column)
         .replace_strict(SOURCE_TYPES, default="OTHER", return_dtype=pl.String)
@@ -138,29 +115,20 @@ def is_renewable() -> pl.Expr:
     return pl.col("source_type").is_in(RENEWABLE_SOURCE_TYPES) | renewable_fuel
 
 
-# --- Generic steps ------------------------------------------------------------
-
-
 def split_rejected(df: pl.DataFrame, required: list[str]) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Separate rows that miss any required value."""
     has_nulls = pl.any_horizontal([pl.col(column).is_null() for column in required])
     return df.filter(~has_nulls), df.filter(has_nulls)
 
 
 def deduplicate(df: pl.DataFrame, keys: list[str]) -> tuple[pl.DataFrame, int]:
-    """Keep the last occurrence of each key (ONS appends revisions at the end)."""
     unique = df.unique(subset=keys, keep="last", maintain_order=True)
     return unique, df.height - unique.height
 
 
 def in_period_or_unparsed(column: str, period: Period) -> pl.Expr:
-    """Rows of the period, plus rows whose timestamp failed to parse (to reject them)."""
     return pl.col(column).is_null() | (
         (pl.col(column) >= period.start) & (pl.col(column) < period.end)
     )
-
-
-# --- Datasets -----------------------------------------------------------------
 
 
 def transform_load_curve(raw: pl.DataFrame, period: Period) -> TransformResult:
@@ -193,8 +161,6 @@ def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformRe
     df = normalize_labels(df, ["plant_type", "fuel_type"])
     df = with_source_type(df, "plant_type")
 
-    # Since 2025 ONS publishes aggregated small plants (e.g. distributed solar,
-    # "MMGD") without an ONS id. Their name is unique, so it becomes the key.
     df = df.with_columns(
         pl.coalesce(
             pl.col("ons_plant_id"),
@@ -204,8 +170,6 @@ def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformRe
     ).drop("ons_plant_id")
 
     valid, rejected = split_rejected(df, ["measured_at", "plant_id", "plant_name", "subsystem_id"])
-    # A blank value means the plant reported no measurement for that hour;
-    # it is a known gap in the source, not a malformed row.
     missing = valid.filter(pl.col("generation_mwh").is_null()).height
     valid = valid.filter(pl.col("generation_mwh").is_not_null())
     valid, duplicates = deduplicate(valid, ["plant_id", "measured_at"])
@@ -218,7 +182,7 @@ def transform_generation_capacity(raw: pl.DataFrame, snapshot_date: date) -> Tra
     df = raw.select(
         parse_code("cod_equipamento").alias("unit_id"),
         clean_text("nom_unidadegeradora").alias("unit_name"),
-        parse_int("num_unidadegeradora").alias("unit_number"),
+        parse_code("num_unidadegeradora").alias("unit_number"),
         clean_text("nom_usina").alias("plant_name"),
         parse_code("ceg").alias("ceg"),
         clean_text("nom_tipousina").alias("plant_type"),
@@ -243,9 +207,6 @@ def transform_generation_capacity(raw: pl.DataFrame, snapshot_date: date) -> Tra
     return TransformResult(valid.sort("unit_id"), rejected, duplicates)
 
 
-# --- Curtailment ----------------------------------------------------------------
-
-# Measured resource per technology: wind speed (m/s) or solar irradiance (W/m2).
 RESOURCE_COLUMNS = {
     "WIND": ("val_ventoverificado", "flg_dadoventoinvalido"),
     "SOLAR": ("val_irradianciaverificado", "flg_dadoirradianciainvalido"),
@@ -267,11 +228,6 @@ def transform_marginal_cost(raw: pl.DataFrame, period: Period) -> TransformResul
 def transform_cluster_curtailment(
     raw: pl.DataFrame, period: Period, source_type: str
 ) -> TransformResult:
-    """Cluster level ("conjunto"): the official curtailment (GNRa) and its reasons.
-
-    Values are average MW over each half-hour. Individually dispatched plants
-    appear here under their own ONS id.
-    """
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),
         parse_code("id_ons").alias("cluster_id"),
@@ -305,7 +261,6 @@ def transform_cluster_curtailment(
 def transform_plant_curtailment(
     raw: pl.DataFrame, period: Period, source_type: str
 ) -> TransformResult:
-    """Plant level ("detalhamento por usina"): estimated vs. verified generation."""
     resource_column, invalid_flag_column = RESOURCE_COLUMNS[source_type]
     cluster_id = parse_code("id_ons_conjuntousina")
     df = raw.select(
@@ -313,7 +268,6 @@ def transform_plant_curtailment(
         parse_code("id_ons").alias("plant_id"),
         clean_text("nom_usina").alias("plant_name"),
         parse_code("ceg").alias("ceg"),
-        # Individually dispatched plants have no cluster: they are their own.
         pl.coalesce(cluster_id, parse_code("id_ons")).alias("cluster_id"),
         pl.coalesce(clean_text("nom_conjuntousina"), clean_text("nom_usina")).alias("cluster_name"),
         cluster_id.is_not_null().alias("_has_cluster"),
@@ -331,8 +285,6 @@ def transform_plant_curtailment(
     df = df.with_columns(pl.lit(source_type).alias("source_type"))
 
     valid, rejected = split_rejected(df, ["measured_at", "plant_id", "cluster_id", "subsystem_id"])
-    # A plant that joins a cluster mid-month shows up twice for the same
-    # half-hour: with and without the cluster. Keep the row with the cluster.
     valid = valid.sort("_has_cluster", maintain_order=True)
     valid, duplicates = deduplicate(valid, ["plant_id", "measured_at"])
     return TransformResult(

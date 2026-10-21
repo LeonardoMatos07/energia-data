@@ -1,5 +1,3 @@
-"""Monthly reference period handled by each pipeline run."""
-
 from __future__ import annotations
 
 import re
@@ -20,7 +18,6 @@ class Period:
 
     @classmethod
     def parse(cls, value: str) -> Period:
-        """Parse a period written as ``YYYY-MM``."""
         match = _PERIOD_PATTERN.match(value.strip())
         if not match:
             raise ValueError(f"Expected a period formatted as YYYY-MM, got {value!r}")
@@ -32,18 +29,14 @@ class Period:
 
     @property
     def start(self) -> datetime:
-        """First instant of the month (inclusive)."""
         return datetime(self.year, self.month, 1)
 
     @property
     def end(self) -> datetime:
-        """First instant of the following month (exclusive)."""
         return self.next().start
 
     @property
     def hours(self) -> int:
-        # Brazil has not observed daylight saving time since 2019, so every
-        # day in the ONS series has exactly 24 hourly records.
         return int((self.end - self.start).total_seconds() // 3600)
 
     @property
@@ -65,7 +58,6 @@ class Period:
 
 
 def periods_between(first: Period, last: Period) -> list[Period]:
-    """Every month from ``first`` to ``last``, inclusive."""
     if first > last:
         raise ValueError(f"{first} is after {last}")
     periods = [first]
@@ -75,7 +67,6 @@ def periods_between(first: Period, last: Period) -> list[Period]:
 
 
 def trailing_periods(last: Period, count: int) -> list[Period]:
-    """The ``count`` months ending at ``last`` (the reprocessing window)."""
     first = last
     for _ in range(count - 1):
         first = first.previous()

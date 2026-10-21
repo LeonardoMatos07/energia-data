@@ -37,7 +37,6 @@ def cluster_row(**values) -> dict:
 
 
 def clusters_frame(*rows: dict) -> pl.DataFrame:
-    """Typed like the silver table, even when a column only holds nulls."""
     return pl.DataFrame(
         list(rows),
         schema_overrides={
@@ -66,7 +65,7 @@ class TestPriceSeries:
         )
 
     def test_fills_missing_days_from_the_previous_day(self):
-        days = [day for day in range(30) if day != 4]  # 2026-09-05 missing, like ONS
+        days = [day for day in range(30) if day != 4]
         series = curtailment.price_series(self.cmo(days), NO_LIMITS, SEPTEMBER)
 
         assert series.height == SEPTEMBER.half_hours
@@ -91,7 +90,7 @@ class TestEnrichClusters:
         df = curtailment.enrich_clusters(clusters_frame(cluster_row()), prices(100.0))
         row = df.row(0, named=True)
 
-        assert row["generation_mwh"] == 50.0  # 100 MW over half an hour
+        assert row["generation_mwh"] == 50.0
         assert row["curtailed_mwh"] == 30.0
         assert row["curtailed_mwh_ene"] == 30.0
         assert row["loss_brl"] == 3000.0
@@ -103,7 +102,7 @@ class TestEnrichClusters:
         assert result["curtailed_mwh_rel"] == pytest.approx(10.0)
         assert result["curtailed_mwh_cnf"] == pytest.approx(5.0)
         assert result["curtailed_mwh_ene"] == pytest.approx(10.0)
-        assert result["curtailed_mwh_other"] == pytest.approx(5.0)  # 5 unclassified minutes
+        assert result["curtailed_mwh_other"] == pytest.approx(5.0)
 
     def test_falls_back_to_reason_code_without_minutes(self):
         row = cluster_row(
@@ -148,15 +147,14 @@ class TestAllocation:
         allocated = curtailment.allocate_to_plants(plants, self.clusters())
         by_plant = dict(allocated.select("plant_id", "curtailed_mwh").iter_rows())
 
-        # Losses of 60 and 20 MW share the official 30 MWh as 3:1.
         assert by_plant == {"P1": pytest.approx(22.5), "P2": pytest.approx(7.5)}
 
     def test_falls_back_to_estimated_generation_then_equal_split(self):
         plants = self.plants(
             [
-                ("P1", T0, 30.0, 30.0, False),  # no own loss: weight by estimate
+                ("P1", T0, 30.0, 30.0, False),
                 ("P2", T0, 10.0, 10.0, False),
-                ("P1", T1, 0.0, 0.0, False),  # nothing at all: equal split
+                ("P1", T1, 0.0, 0.0, False),
                 ("P2", T1, 0.0, 0.0, False),
             ]
         )
@@ -176,6 +174,21 @@ class TestAllocation:
         allocated = curtailment.allocate_to_plants(plants, clusters)
         result = curtailment.reconcile(allocated, clusters)
 
+        assert result["allocated_mwh"] == pytest.approx(result["official_mwh"])
+        assert result["unallocated_mwh"] == pytest.approx(0.0)
+        assert allocated["loss_brl"].sum() == pytest.approx(result["official_mwh"] * 100.0)
+
+    def test_standalone_plant_in_cluster_files_gets_its_own_cut(self):
+        plants = self.plants([("P1", T0, 90.0, 30.0, True), ("P2", T0, 50.0, 30.0, True)])
+        clusters = curtailment.enrich_clusters(
+            clusters_frame(cluster_row(), cluster_row(cluster_id="P2", gnra_mw_avg=20.0)),
+            prices(),
+        )
+        allocated = curtailment.allocate_to_plants(plants, clusters)
+        by_plant = dict(allocated.select("plant_id", "curtailed_mwh").iter_rows())
+        result = curtailment.reconcile(allocated, clusters)
+
+        assert by_plant == {"P1": pytest.approx(22.5), "P2": pytest.approx(17.5)}
         assert result["allocated_mwh"] == pytest.approx(result["official_mwh"])
         assert result["unallocated_mwh"] == pytest.approx(0.0)
         assert allocated["loss_brl"].sum() == pytest.approx(result["official_mwh"] * 100.0)
@@ -228,10 +241,8 @@ class TestCurtailmentTransforms:
     def test_plant_transform_handles_plants_without_cluster_and_duplicates(self):
         raw = raw_frame(
             self.PLANT_HEADER,
-            # Individually dispatched plant: it is its own cluster.
             "NE;CE;Tipo I;;Icaraizinho;CEUCZ;EOL.CV.CE.028699-0.01;2026-09-01 12:00:00;8.1;0;"
             "20.0;15.0;;Supervisão;0;Curva;;1",
-            # Same plant and half-hour twice: without and with its new cluster.
             "NE;RN;Tipo II-C;;São Fernando 4;RNESF4;EOL.CV.RN.037077-0.01;2026-09-01 12:00:00;"
             "9.0;0;11.31;8.948;;Supervisão;0;Curva;;0",
             "NE;RN;Tipo II-C;Conj. Monte do Ronca;São Fernando 4;RNESF4;EOL.CV.RN.037077-0.01;"

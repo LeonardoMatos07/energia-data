@@ -37,8 +37,8 @@ def test_local_call_sends_no_token(settings, monkeypatch):
     notify.request_revalidation(replace(settings, api_url="http://localhost:8000/"))
 
     url, kwargs = calls[0]
-    assert url == "http://localhost:8000/v1/admin/revalidar"
-    assert kwargs["json"] == {"tags": ["curtailment", "usinas"]}
+    assert url == "http://localhost:8000/v1/admin/revalidate"
+    assert kwargs["json"] == {"tags": ["curtailment", "plants"]}
     assert kwargs["headers"] == {}
 
 

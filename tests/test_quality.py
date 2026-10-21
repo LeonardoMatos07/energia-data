@@ -7,7 +7,7 @@ from energy_pipeline import quality
 from energy_pipeline.period import Period
 from energy_pipeline.quality import DataQualityError, Severity
 
-FEBRUARY_2024 = Period(2024, 2)  # leap year: 29 days = 696 hours
+FEBRUARY_2024 = Period(2024, 2)
 
 
 def complete_load_curve(period: Period) -> pl.DataFrame:

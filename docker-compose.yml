@@ -1,8 +1,3 @@
-# Local stack: Airflow 3 (LocalExecutor) + S3-compatible lake + PostgreSQL warehouse.
-# Based on the official Airflow docker-compose, trimmed down for a single machine.
-# The warehouse schema belongs to energia-api: the `migrate` service runs its
-# Alembic migrations, so ../energia-api must exist next to this repository.
-
 name: energia-data
 
 x-airflow-common: &airflow-common
@@ -20,7 +15,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_ISSUER: airflow
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
-    # Pipeline settings (see src/energy_pipeline/config.py)
     PIPELINE_START_DATE: ${PIPELINE_START_DATE:-2025-01-01}
     REPROCESS_MONTHS: ${REPROCESS_MONTHS:-3}
     RECONCILIATION_TOLERANCE: ${RECONCILIATION_TOLERANCE:-0.01}
@@ -30,7 +24,6 @@ x-airflow-common: &airflow-common
     AWS_SECRET_ACCESS_KEY: ${LAKE_SECRET_KEY:-lakesecret}
     AWS_DEFAULT_REGION: us-east-1
     WAREHOUSE_DSN: postgresql://${WAREHOUSE_USER:-warehouse}:${WAREHOUSE_PASSWORD:-warehouse}@warehouse-db:5432/${WAREHOUSE_DB:-warehouse}
-    # Portal revalidation through energia-api (running on the host, port 8000).
     API_URL: ${API_URL:-http://host.docker.internal:8000}
     COGNITO_TOKEN_URL: ${COGNITO_TOKEN_URL:-}
     DATA_CLIENT_ID: ${DATA_CLIENT_ID:-}
@@ -48,7 +41,6 @@ x-airflow-common: &airflow-common
       condition: service_healthy
 
 services:
-  # --- Storage ---------------------------------------------------------------
 
   airflow-db:
     image: postgres:16-alpine
@@ -82,8 +74,6 @@ services:
       start_period: 5s
     restart: always
 
-  # S3-compatible object store (SeaweedFS) standing in for AWS S3.
-  # S3 API on :8333, file browser on :8888.
   lake:
     image: chrislusf/seaweedfs:4.48
     entrypoint: weed
@@ -101,19 +91,16 @@ services:
       - lake-data:/data
     restart: always
 
-  # Creates/updates the warehouse tables with energia-api's Alembic migrations.
   migrate:
     build: ../energia-api
     image: energia-api:local
     command: ["alembic", "upgrade", "head"]
     environment:
-      AMBIENTE: local
+      ENVIRONMENT: local
       DATABASE_URL: postgresql+psycopg://${WAREHOUSE_USER:-warehouse}:${WAREHOUSE_PASSWORD:-warehouse}@warehouse-db:5432/${WAREHOUSE_DB:-warehouse}
     depends_on:
       warehouse-db:
         condition: service_healthy
-
-  # --- Airflow -----------------------------------------------------------------
 
   airflow-init:
     <<: *airflow-common
@@ -150,7 +137,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # With the LocalExecutor, tasks run inside the scheduler container.
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler

@@ -1,13 +1,3 @@
-"""Run a pipeline without Airflow, for local development, backfills and debugging.
-
-Executes the same steps as the DAGs, sequentially::
-
-    python -m energy_pipeline curtailment                  # reprocessing window
-    python -m energy_pipeline curtailment --month 2026-09
-    python -m energy_pipeline curtailment --from 2023-01 --to 2026-09
-    python -m energy_pipeline grid --month 2026-09
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -18,7 +8,7 @@ from datetime import UTC, datetime
 from energy_pipeline import steps
 from energy_pipeline.config import Settings
 from energy_pipeline.period import Period, periods_between, trailing_periods
-from energy_pipeline.sources import PIPELINES
+from energy_pipeline.sources import PIPELINES, Partitioning
 
 
 def run_source(source_name: str, period: Period, settings: Settings) -> steps.Manifest:
@@ -30,14 +20,14 @@ def run_source(source_name: str, period: Period, settings: Settings) -> steps.Ma
 
 def print_summary(manifests: list[steps.Manifest]) -> None:
     header = (
-        f"{'source':<27}{'period':<9}{'changed':>8}{'raw':>10}{'prata':>10}"
+        f"{'source':<27}{'period':<9}{'changed':>8}{'raw':>10}{'silver':>10}"
         f"{'rejected':>10}{'missing':>9}"
     )
     print("\n" + header + "\n" + "-" * len(header))
     for m in manifests:
         print(
             f"{m['source']:<27}{m['period']:<9}{'yes' if m['source_changed'] else 'no':>8}"
-            f"{m['raw_rows']:>10}{m['prata_rows']:>10}{m['rejected_rows']:>10}"
+            f"{m['raw_rows']:>10}{m['silver_rows']:>10}{m['rejected_rows']:>10}"
             f"{m['missing_measurements']:>9}"
         )
         if "reconciliation" in m:
@@ -82,21 +72,23 @@ def main(argv: list[str] | None = None) -> None:
     started = time.perf_counter()
     steps.prepare_infrastructure(settings)
     plan = {name: set(source.periods_to_process(periods)) for name, source in sources.items()}
+    for name, source in sources.items():
+        if source.partitioning is Partitioning.SNAPSHOT:
+            plan[name] = {periods[0]}
 
     manifests = []
     for period in periods:
-        # Sources are declared with dependencies first.
         for name in sources:
             if period in plan[name]:
                 manifests.append(run_source(name, period, settings))
-
-    if args.pipeline == "curtailment":
-        for period in periods:
+        if args.pipeline == "curtailment":
             published = steps.run_publish(period, settings)
             print(f"publish {period}: {published.get('rows', 'nothing to publish')}")
+
+    if args.pipeline == "curtailment":
         try:
             steps.notify_portal(settings)
-        except Exception as error:  # the data is loaded; the portal can be refreshed later
+        except Exception as error:
             logging.warning("Portal revalidation failed: %s", error)
     print_summary(manifests)
     print(f"\nDone in {time.perf_counter() - started:.0f}s")

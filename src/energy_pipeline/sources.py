@@ -1,9 +1,3 @@
-"""ONS open data sources consumed by the pipelines.
-
-ONS (Operador Nacional do Sistema Eletrico) publishes its datasets in a public
-S3 bucket. See https://dados.ons.org.br for the full catalog.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,9 +10,9 @@ DEFAULT_ONS_BASE_URL = "https://ons-aws-prod-opendata.s3.amazonaws.com/dataset"
 
 
 class Partitioning(StrEnum):
-    YEAR = "year"  # one file per year, updated in place by ONS
-    MONTH = "month"  # one file per month
-    SNAPSHOT = "snapshot"  # a single file that always holds the current state
+    YEAR = "year"
+    MONTH = "month"
+    SNAPSHOT = "snapshot"
 
 
 class FileFormat(StrEnum):
@@ -35,9 +29,7 @@ class Source:
     description: str
     file_format: FileFormat = FileFormat.CSV
     available_from: Period | None = None
-    # Sources whose silver data must exist before this one can be modeled.
     depends_on: tuple[str, ...] = ()
-    # WIND or SOLAR for curtailment sources.
     source_type: str | None = None
 
     def file_name(self, period: Period) -> str:
@@ -47,7 +39,6 @@ class Source:
         return f"{base_url.rstrip('/')}/{self.ons_dataset}/{self.file_name(period)}"
 
     def partition(self, period: Period, snapshot_date: date) -> str:
-        """Hive-style partition of the raw file in the bronze layer."""
         if self.partitioning is Partitioning.SNAPSHOT:
             return f"snapshot_date={snapshot_date.isoformat()}"
         if self.partitioning is Partitioning.YEAR:
@@ -55,21 +46,17 @@ class Source:
         return f"year={period.year:04d}/month={period.month:02d}"
 
     def processed_partition(self, period: Period, snapshot_date: date) -> str:
-        """Partition in the silver/gold layers. Yearly files are processed per month."""
         if self.partitioning is Partitioning.SNAPSHOT:
             return self.partition(period, snapshot_date)
         return f"year={period.year:04d}/month={period.month:02d}"
 
     def periods_to_process(self, periods: list[Period]) -> list[Period]:
-        """Keep the months this source publishes; snapshots only need one run."""
         if self.partitioning is Partitioning.SNAPSHOT:
             return periods[-1:]
         if self.available_from is None:
             return periods
         return [period for period in periods if period >= self.available_from]
 
-
-# --- Grid: load, generation and capacity --------------------------------------
 
 LOAD_CURVE = Source(
     name="load_curve",
@@ -96,7 +83,6 @@ GENERATION_CAPACITY = Source(
     description="Installed capacity per generating unit, with commissioning dates.",
 )
 
-# --- Curtailment (constrained-off) of wind and solar plants --------------------
 
 MARGINAL_COST = Source(
     name="marginal_cost",
@@ -160,11 +146,9 @@ def _registry(*sources: Source) -> dict[str, Source]:
     return {source.name: source for source in sources}
 
 
-# Dependencies always come before their dependents.
 GRID_SOURCES = _registry(LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
-    # Installed capacity of each plant (potencia_mw on the portal).
     GENERATION_CAPACITY,
     WIND_CLUSTER_CURTAILMENT,
     SOLAR_CLUSTER_CURTAILMENT,

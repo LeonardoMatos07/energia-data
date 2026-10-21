@@ -1,15 +1,3 @@
-"""Builds the pipeline DAGs.
-
-Each source becomes a task group, mapped over the months to process::
-
-    extract -> transform -> validate -> record
-
-A source's transform waits for the validation of the sources it depends on
-(e.g. plant curtailment needs the cluster totals and the prices). Pipelines that
-feed the portal then ``publish`` each month (gold aggregates in the lake and in
-Postgres) and ask the portal to regenerate its pages.
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -24,14 +12,12 @@ MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
 
 
 def _settings() -> Any:
-    # Imported lazily: DAG files are parsed often and must stay cheap to import.
     from energy_pipeline.config import Settings
 
     return Settings.from_env()
 
 
 def _record_failure(context: dict[str, Any]) -> None:
-    """Failed tasks also show up in carga_execucao (admin area)."""
     from energy_pipeline import steps
 
     task_instance = context["task_instance"]
@@ -56,8 +42,8 @@ def build_pipeline_dag(
     doc_md: str,
 ) -> Any:
     sources = PIPELINES[pipeline]
-    lake_asset = Asset(f"s3://energy-lake/prata/{pipeline}")
-    portal_asset = Asset("postgres://warehouse/curtailment_mensal")
+    lake_asset = Asset(f"s3://energy-lake/silver/{pipeline}")
+    portal_asset = Asset("postgres://warehouse-db:5432/warehouse/public/plant_monthly_curtailment")
 
     @dag(
         dag_id=dag_id,
@@ -66,7 +52,6 @@ def build_pipeline_dag(
         start_date=start_date,
         catchup=catchup,
         max_active_runs=1,
-        # Transforms hold a month of half-hourly data in memory: keep parallelism modest.
         max_active_tasks=4,
         default_args={
             "owner": "data-engineering",
@@ -87,7 +72,6 @@ def build_pipeline_dag(
         def resolve_periods(**context: Any) -> list[str]:
             params = context["params"]
             run_date = context.get("logical_date") or datetime.now(UTC)
-            # A run always targets complete months: the one before the run date.
             previous = Period.from_datetime(run_date).previous()
             if params.get("first_month"):
                 last = Period.parse(params["last_month"]) if params.get("last_month") else previous
@@ -132,8 +116,6 @@ def build_pipeline_dag(
 
             return steps.run_record(manifest, _settings())
 
-        # A source with no month to process (e.g. solar before 2024-04) is skipped;
-        # that must not prevent publishing the months that do have data.
         @task(trigger_rule="none_failed")
         def publish(period: str) -> dict[str, Any]:
             from energy_pipeline import steps

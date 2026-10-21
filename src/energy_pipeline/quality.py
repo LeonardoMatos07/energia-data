@@ -1,8 +1,3 @@
-"""Lightweight data quality checks that gate the load into the warehouse.
-
-ERROR checks stop the pipeline; WARN checks are only logged.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -18,12 +13,9 @@ from energy_pipeline.period import Period
 log = logging.getLogger(__name__)
 
 SUBSYSTEMS = {"N", "NE", "S", "SE"}
-# The capacity registry also lists the Paraguayan half of Itaipu (50 Hz units) as "PY".
 CAPACITY_SUBSYSTEMS = SUBSYSTEMS | {"PY"}
 KNOWN_SOURCE_TYPES = {"HYDRO", "WIND", "SOLAR", "THERMAL", "NUCLEAR"}
-# Itaipu, the largest plant in the grid, peaks around 7 GW per 60 Hz/50 Hz sector.
 MAX_PLANT_GENERATION_MWH = 15_000
-# Angra 2 (~1.35 GW) is the largest single generating unit.
 MAX_UNIT_CAPACITY_MW = 2_000
 MAX_SUBSYSTEM_LOAD_MW = 150_000
 MAX_CMO_BRL_MWH = 10_000
@@ -51,9 +43,6 @@ class DataQualityError(Exception):
     def __init__(self, failures: list[CheckResult]) -> None:
         super().__init__("Data quality checks failed:\n" + "\n".join(map(str, failures)))
         self.failures = failures
-
-
-# --- Checks -----------------------------------------------------------------
 
 
 def not_empty(df: pl.DataFrame) -> CheckResult:
@@ -128,9 +117,6 @@ def completeness(df: pl.DataFrame, expected_rows: int, minimum_ratio: float) -> 
     )
 
 
-# --- Suites per dataset -------------------------------------------------------
-
-
 def load_curve_checks(
     df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
 ) -> list[CheckResult]:
@@ -162,11 +148,9 @@ def plant_generation_checks(
         within_period(df, "measured_at", period),
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
         between(df, "generation_mwh", maximum=MAX_PLANT_GENERATION_MWH),
-        # Thermal plants may report small negative values (auxiliary consumption).
         between(df, "generation_mwh", minimum=0, severity=Severity.WARN),
         accepted_values(df, "source_type", KNOWN_SOURCE_TYPES, Severity.WARN),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
-        # Around 10-15% of plant-hours come without a measurement in the source.
         ratio_at_most("missing_measurements", missing_measurements, total, 0.25, Severity.WARN),
     ]
 
@@ -200,8 +184,6 @@ def marginal_cost_checks(
         within_period(df, "measured_at", period),
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
         between(df, "cmo_brl_mwh", 0, MAX_CMO_BRL_MWH, Severity.WARN),
-        # ONS skips whole days of CMO in about a quarter of the months (Jan/2023
-        # has only 21 of 31 days). Missing days are filled downstream and flagged.
         completeness(df, len(SUBSYSTEMS) * period.half_hours, minimum_ratio=0.6),
         CheckResult(
             "missing_days",
@@ -216,7 +198,6 @@ def marginal_cost_checks(
 def cluster_curtailment_checks(
     df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
 ) -> list[CheckResult]:
-    """Checks on the enriched (gold) cluster table."""
     total = df.height + rejected_rows
     clusters = df["cluster_id"].n_unique()
     curtailed = df["curtailed_mwh"].sum()
@@ -227,9 +208,6 @@ def cluster_curtailment_checks(
         unique(df, ["cluster_id", "measured_at"]),
         within_period(df, "measured_at", period),
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
-        # ONS occasionally reports more than 30 minutes in a half-hour (up to 56 in
-        # Sep/2023). Minutes are only used as proportions between reasons, so the
-        # official cut is unaffected.
         between(df, "minutes_restricted", 0, 30, Severity.WARN),
         between(df, "gnra_mw_avg", minimum=0, severity=Severity.WARN),
         accepted_values(df, "reason_code", RESTRICTION_REASONS, Severity.WARN),
@@ -240,7 +218,6 @@ def cluster_curtailment_checks(
             Severity.WARN,
         ),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
-        # The loss in R$ needs a price for every curtailed half-hour.
         ratio_at_most(
             "unpriced_curtailment", round(unpriced), round(curtailed), 0.01, Severity.WARN
         ),
@@ -255,7 +232,6 @@ def plant_curtailment_checks(
     reconciliation: dict[str, float],
     tolerance: float,
 ) -> list[CheckResult]:
-    """Checks on the allocated (gold) plant table and its reconciliation with ONS."""
     total = df.height + rejected_rows
     official = reconciliation["official_mwh"]
     allocated = reconciliation["allocated_mwh"]
@@ -280,7 +256,6 @@ def plant_curtailment_checks(
 
 
 def enforce(results: list[CheckResult]) -> None:
-    """Log every result and raise if any ERROR check failed."""
     for result in results:
         log.log(logging.INFO if result.passed else logging.WARNING, "%s", result)
     failures = [r for r in results if not r.passed and r.severity is Severity.ERROR]

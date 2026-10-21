@@ -68,7 +68,7 @@ class TestPlantGeneration:
         assert by_plant["AMBA"]["source_type"] == "HYDRO"
         assert by_plant["PQU_ACRAC_GD"]["source_type"] == "SOLAR"
         assert by_plant["PECANA"]["source_type"] == "THERMAL"
-        assert by_plant["PECANA"]["is_renewable"] is True  # biomass
+        assert by_plant["PECANA"]["is_renewable"] is True
         assert by_plant["RJGAS"]["is_renewable"] is False
 
     def test_parses_scientific_notation_and_placeholders(self, raw_plant_generation):
@@ -87,7 +87,7 @@ class TestPlantGeneration:
         result = transform_plant_generation(raw_plant_generation, JANUARY_2024)
 
         assert result.missing_measurements == 1
-        assert result.rejected.height == 1  # only the row without subsystem
+        assert result.rejected.height == 1
         assert result.valid["generation_mwh"].null_count() == 0
 
 
@@ -97,7 +97,7 @@ class TestGenerationCapacity:
         unit = result.valid.filter(pl.col("unit_id") == "ALUXG-0UG5").row(0, named=True)
 
         assert unit["unit_name"] == "UG 527 MW USINA XINGO 5 AL"
-        assert unit["unit_number"] == 5
+        assert unit["unit_number"] == "5"
         assert unit["source_type"] == "HYDRO"
         assert unit["fuel_type"] == "HIDRAULICA"
         assert unit["operation_start_date"] == date(1995, 1, 31)

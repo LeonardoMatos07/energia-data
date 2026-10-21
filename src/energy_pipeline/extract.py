@@ -1,5 +1,3 @@
-"""Download raw files from the ONS open data portal."""
-
 from __future__ import annotations
 
 import hashlib
@@ -7,19 +5,36 @@ import logging
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 log = logging.getLogger(__name__)
 
 _CHUNK_SIZE = 1024 * 1024
 
 
+def _session() -> requests.Session:
+    retry = Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET"],
+    )
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    session.mount("http://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+_http = _session()
+
+
 class SourceNotPublishedError(RuntimeError):
-    """The requested file does not exist (yet) on the ONS portal."""
+    pass
 
 
 def remote_etag(url: str, timeout_seconds: int) -> str | None:
-    """ETag of a published file: it changes whenever ONS revises the file."""
-    response = requests.head(url, timeout=timeout_seconds)
+    response = _http.head(url, timeout=timeout_seconds)
     if response.status_code in (403, 404):
         raise SourceNotPublishedError(f"{url} returned HTTP {response.status_code}")
     response.raise_for_status()
@@ -28,11 +43,9 @@ def remote_etag(url: str, timeout_seconds: int) -> str | None:
 
 
 def download(url: str, destination: Path, timeout_seconds: int) -> str:
-    """Stream ``url`` into ``destination`` and return the file's SHA-256 checksum."""
     log.info("Downloading %s", url)
     checksum = hashlib.sha256()
-    with requests.get(url, stream=True, timeout=timeout_seconds) as response:
-        # The ONS bucket answers 403 instead of 404 for keys that do not exist.
+    with _http.get(url, stream=True, timeout=timeout_seconds) as response:
         if response.status_code in (403, 404):
             raise SourceNotPublishedError(f"{url} returned HTTP {response.status_code}")
         response.raise_for_status()

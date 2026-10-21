@@ -1,14 +1,12 @@
 [project]
 name = "energia-data"
 version = "0.1.0"
-description = "Pipelines de dados da plataforma: ingestão do ONS, data lake e carga dos agregados"
+description = "Data pipelines of the platform: ONS ingestion, data lake and aggregate loading"
 readme = "README.md"
 requires-python = ">=3.12"
-# Runtime dependencies installed on top of the Airflow image.
 dependencies = ["polars==1.20.0"]
 
 [project.optional-dependencies]
-# Shipped by the Airflow image; needed to run the CLI outside it.
 local = [
     "boto3==1.36.0",
     "psycopg2-binary==2.9.10",

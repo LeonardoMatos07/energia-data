@@ -1,5 +1,3 @@
-"""Data lake access on any S3-compatible object store (AWS S3, SeaweedFS, MinIO...)."""
-
 from __future__ import annotations
 
 import io
@@ -19,7 +17,6 @@ class Lake:
     def __init__(self, bucket: str, endpoint_url: str | None = None, client: Any = None) -> None:
         self.bucket = bucket
         if client is None:
-            # Self-hosted S3 implementations generally expect path-style URLs.
             config = Config(s3={"addressing_style": "path"}) if endpoint_url else None
             client = boto3.client("s3", endpoint_url=endpoint_url, config=config)
         self._s3 = client
@@ -39,7 +36,6 @@ class Lake:
         log.info("Uploaded s3://%s/%s", self.bucket, key)
 
     def metadata(self, key: str) -> dict[str, str] | None:
-        """User metadata of an object, or None if it does not exist."""
         try:
             return self._s3.head_object(Bucket=self.bucket, Key=key)["Metadata"]
         except ClientError as error:

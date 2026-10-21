@@ -1,4 +1,7 @@
-# Yearly PLD floor and hourly ceiling (R$/MWh), set by ANEEL resolutions.
-# Fill one row per year from the official resolution, citing it in "reference".
-# Years without a row are priced at the unbounded CMO (price_basis = 'CMO').
 year,pld_min,pld_max_hourly,reference
+2021,49.77,1141.85,"ANEEL, hourly PLD limits for 2021 (Brasil Energia, Dec/2020)"
+2022,55.70,1326.50,"ANEEL, REH 2.994 of 2021-12-14, values updated on 2021-12-17"
+2023,69.04,1404.77,"ANEEL, REH 3.167 of 2022-12-29, corrected in the DOU of 2023-01-10"
+2024,61.07,1470.57,"ANEEL, PLD limits for 2024 (AREH 3.304/2023 vote)"
+2025,58.60,1542.23,"ANEEL, Despacho 3.625 of 2024-12-16"
+2026,57.31,1611.04,"ANEEL, Despacho 3.850, DOU of 2025-12-23"

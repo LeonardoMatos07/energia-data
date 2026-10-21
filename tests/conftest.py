@@ -1,5 +1,3 @@
-"""Fixtures built from real rows of ONS files, including their quirks."""
-
 from __future__ import annotations
 
 import polars as pl
@@ -7,7 +5,6 @@ import pytest
 
 
 def raw_frame(header: str, *lines: str) -> pl.DataFrame:
-    """Build a DataFrame the way read_raw_csv does: every column as text."""
     columns = header.split(";")
     rows = [line.split(";") for line in lines]
     return pl.DataFrame(rows, schema=dict.fromkeys(columns, pl.String), orient="row")
@@ -19,11 +16,11 @@ def raw_load_curve() -> pl.DataFrame:
         "id_subsistema;nom_subsistema;din_instante;val_cargaenergiahomwmed",
         "N;NORTE;2024-01-01 00:00:00;6539.56000000",
         "SE;SUDESTE/CENTRO-OESTE;2024-01-01 00:00:00;38211.10000000",
-        "SE;SUDESTE/CENTRO-OESTE;2024-01-01 00:00:00;38300.00000000",  # revised value
-        " s ;  SUL ;2024-01-01 01:00:00;9966.972",  # padded and lowercase
-        "NE;NORDESTE;2024-01-01 02:00:00;",  # missing value
-        "NE;NORDESTE;not a date;11976.884",  # unparseable timestamp
-        "N;NORTE;2024-02-01 00:00:00;6400.0",  # outside the period
+        "SE;SUDESTE/CENTRO-OESTE;2024-01-01 00:00:00;38300.00000000",
+        " s ;  SUL ;2024-01-01 01:00:00;9966.972",
+        "NE;NORDESTE;2024-01-01 02:00:00;",
+        "NE;NORDESTE;not a date;11976.884",
+        "N;NORTE;2024-02-01 00:00:00;6400.0",
     )
 
 
@@ -39,17 +36,14 @@ def raw_plant_generation() -> pl.DataFrame:
         "UHE.PH.AM.000190-2.01;86.93800000",
         "2024-01-01 00:00:00;N;NORTE;AC;ACRE;Pequenas Usinas (MMGD);FOTOVOLTAICA;Fotovoltaica;"
         "PQU ACRAC FOTOV MMGD;PQU_ACRAC_GD;-;0E-8",
-        # Aggregated plant published without an ONS id (2025+ files).
         "2024-01-01 00:00:00;N;NORTE;AM;AMAZONAS;Pequenas Usinas (MMGD);FOTOVOLTAICA;Fotovoltaica;"
         "PQU MMAM MMGD;;-;12.5",
-        # No measurement for this hour.
         "2024-01-01 01:00:00;N;NORTE;AM;AMAZONAS;TIPO I;HIDROELÉTRICA;Hidráulica;Balbina;AMBA;"
         "UHE.PH.AM.000190-2.01;",
         "2024-01-01 00:00:00;NE;NORDESTE;PE;PERNAMBUCO;TIPO I;TÉRMICA;Biomassa;Usina Cana;PECANA;"
         "UTE.AI.PE.000001-1.01;15.0",
         "2024-01-01 00:00:00;SE;SUDESTE;RJ;RIO DE JANEIRO;TIPO I;TÉRMICA;Gás;Usina Gás;RJGAS;"
         "UTE.GN.RJ.000002-2.01;300.0",
-        # Missing subsystem: cannot be attributed, goes to quarantine.
         "2024-01-01 00:00:00;;;RJ;RIO DE JANEIRO;TIPO I;TÉRMICA;Gás;Usina X;RJX;-;1.0",
     )
 

@@ -1,9 +1,3 @@
-# Production override, used on the Airflow EC2 instance:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-# Uses the image published to ECR, real S3 and RDS; local-only services
-# (lake, warehouse-db, migrate) are not started. Values come from /opt/energia-data/.env,
-# written by the instance from Secrets Manager (see energia-infra).
-
 x-prod-env: &prod-env
   AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
   LAKE_S3_ENDPOINT_URL: ""
@@ -21,7 +15,6 @@ services:
   airflow-apiserver:
     image: ${ECR_IMAGE}
     environment: *prod-env
-    # Reached only through SSM port forwarding.
     ports: !reset ["127.0.0.1:8080:8080"]
   airflow-scheduler:
     image: ${ECR_IMAGE}

@@ -25,11 +25,11 @@ def prices() -> pl.DataFrame:
 
 def cluster(**values) -> dict:
     defaults = {
-        "cluster_name": "Conj. A",
+        "cluster_name": "Cluster A",
         "state_id": "RN",
         "source_type": "WIND",
         "connection_point_name": "SE Ceará-Mirim 230 kV",
-        "operator_agent": "AGENTE",
+        "operator_agent": "AGENT",
     }
     return cluster_row(**(defaults | values))
 
@@ -37,7 +37,7 @@ def cluster(**values) -> dict:
 def plant(plant_id: str, cluster_id: str, estimated: float, verified: float, **values) -> dict:
     row = {
         "plant_id": plant_id,
-        "plant_name": f"Usina {plant_id}",
+        "plant_name": f"Plant {plant_id}",
         "ceg": f"EOL.{plant_id}",
         "cluster_id": cluster_id,
         "measured_at": T0,
@@ -55,9 +55,7 @@ def plant(plant_id: str, cluster_id: str, estimated: float, verified: float, **v
 def tables():
     clusters = curtailment.enrich_clusters(
         clusters_frame(
-            # A real cluster with two plants: official cut 30 MWh, verified 50 MWh.
             cluster(cluster_id="CJU_A"),
-            # A plant dispatched on its own: its cluster id is its own id.
             cluster(
                 cluster_id="SOLO",
                 cluster_name="Solo",
@@ -67,10 +65,9 @@ def tables():
                 reason_code=None,
                 generation_mw_avg=40.0,
             ),
-            # Another state and source.
             cluster(
                 cluster_id="CJU_B",
-                cluster_name="Conj. B",
+                cluster_name="Cluster B",
                 state_id="RS",
                 subsystem_id="S",
                 source_type="SOLAR",
@@ -108,85 +105,84 @@ def test_slugs_are_ascii_and_stable():
     assert make_slug("Conj. Monte do Ronca", "CJU_RNMNR") == "conj-monte-do-ronca-cju-rnmnr"
 
 
-def test_usina_has_plants_and_real_clusters_only(tables):
-    usina = {row["id"]: row for row in tables.usina.iter_rows(named=True)}
+def test_plant_table_has_plants_and_real_clusters_only(tables):
+    plants = {row["id"]: row for row in tables.plant.iter_rows(named=True)}
 
-    assert set(usina) == {"CJU_A", "CJU_B", "P1", "P2", "P3", "SOLO"}
-    assert usina["CJU_A"]["tipo"] == "conjunto"
-    assert usina["P1"]["conjunto_id"] == "CJU_A"
-    assert usina["SOLO"]["tipo"] == "usina"
-    assert usina["SOLO"]["conjunto_id"] is None
-    assert usina["P3"]["fonte"] == "solar"
-    assert usina["CJU_A"]["ponto_conexao"] == "SE Ceará-Mirim 230 kV"
-    # Decommissioned units do not count; a cluster sums its plants.
-    assert usina["P1"]["potencia_mw"] == 100.0
-    assert usina["P2"]["potencia_mw"] == 30.0
-    assert usina["CJU_A"]["potencia_mw"] == 130.0
+    assert set(plants) == {"CJU_A", "CJU_B", "P1", "P2", "P3", "SOLO"}
+    assert plants["CJU_A"]["kind"] == "cluster"
+    assert plants["P1"]["cluster_id"] == "CJU_A"
+    assert plants["SOLO"]["kind"] == "plant"
+    assert plants["SOLO"]["cluster_id"] is None
+    assert plants["P3"]["source"] == "solar"
+    assert plants["CJU_A"]["connection_point"] == "SE Ceará-Mirim 230 kV"
+    assert plants["P1"]["capacity_mw"] == 100.0
+    assert plants["P2"]["capacity_mw"] == 30.0
+    assert plants["CJU_A"]["capacity_mw"] == 130.0
 
 
 def test_cluster_equals_the_sum_of_its_plants(tables):
-    monthly = {row["usina_id"]: row for row in tables.mensal_usina.iter_rows(named=True)}
+    monthly = {row["plant_id"]: row for row in tables.plant_monthly.iter_rows(named=True)}
 
-    assert monthly["CJU_A"]["energia_cortada_mwh"] == pytest.approx(30.0)
-    assert monthly["P1"]["energia_cortada_mwh"] + monthly["P2"]["energia_cortada_mwh"] == (
-        pytest.approx(30.0)
-    )
-    assert monthly["CJU_A"]["percentual_corte"] == pytest.approx(37.5)  # 30 / (50 + 30)
-    assert monthly["CJU_A"]["perda_estimada_brl"] == pytest.approx(3000.0)
+    assert monthly["CJU_A"]["curtailed_mwh"] == pytest.approx(30.0)
+    assert monthly["P1"]["curtailed_mwh"] + monthly["P2"]["curtailed_mwh"] == pytest.approx(30.0)
+    assert monthly["CJU_A"]["curtailment_pct"] == pytest.approx(37.5)
+    assert monthly["CJU_A"]["estimated_loss_brl"] == pytest.approx(3000.0)
 
 
 def test_ranking_and_state_average_for_plants(tables):
-    monthly = {row["usina_id"]: row for row in tables.mensal_usina.iter_rows(named=True)}
+    monthly = {row["plant_id"]: row for row in tables.plant_monthly.iter_rows(named=True)}
 
-    assert monthly["P1"]["posicao_nacional"] == 1
-    assert monthly["P2"]["posicao_nacional"] == 2
-    assert monthly["P3"]["posicao_nacional"] == 1  # ranked among solar plants
-    assert monthly["CJU_A"]["posicao_nacional"] is None
-    rn_wind = tables.mensal_uf.filter((pl.col("uf") == "RN") & (pl.col("fonte") == "eolica"))
-    assert monthly["P1"]["percentual_corte_medio_uf"] == rn_wind["percentual_corte"].item()
+    assert monthly["P1"]["national_rank"] == 1
+    assert monthly["P2"]["national_rank"] == 2
+    assert monthly["P3"]["national_rank"] == 1
+    assert monthly["CJU_A"]["national_rank"] is None
+    rn_wind = tables.state_monthly.filter((pl.col("state") == "RN") & (pl.col("source") == "wind"))
+    assert monthly["P1"]["state_avg_curtailment_pct"] == rn_wind["curtailment_pct"].item()
 
 
 def test_regional_totals_include_total_source_and_national_row(tables):
-    sin = {(r["subsistema"], r["fonte"]): r for r in tables.mensal_sin.iter_rows(named=True)}
-    uf = {(r["uf"], r["fonte"]): r for r in tables.mensal_uf.iter_rows(named=True)}
+    subsystems = {
+        (r["subsystem"], r["source"]): r for r in tables.subsystem_monthly.iter_rows(named=True)
+    }
+    states = {(r["state"], r["source"]): r for r in tables.state_monthly.iter_rows(named=True)}
 
-    assert sin[("SIN", "total")]["energia_cortada_mwh"] == pytest.approx(30.0 + 10.0)
-    assert sin[("NE", "eolica")]["usinas_afetadas"] == 2
-    assert uf[("RN", "total")]["geracao_verificada_mwh"] == pytest.approx(50.0 + 20.0)
-    assert uf[("RS", "solar")]["usinas_afetadas"] == 1
-    assert set(tables.mensal_uf["mes"].unique().to_list()) == {date(2026, 9, 1)}
+    assert subsystems[("SIN", "total")]["curtailed_mwh"] == pytest.approx(30.0 + 10.0)
+    assert subsystems[("NE", "wind")]["affected_plants"] == 2
+    assert states[("RN", "total")]["verified_generation_mwh"] == pytest.approx(50.0 + 20.0)
+    assert states[("RS", "solar")]["affected_plants"] == 1
+    assert set(tables.state_monthly["month"].unique().to_list()) == {date(2026, 9, 1)}
 
 
 def test_columns_follow_the_api_contract(tables):
-    assert tables.mensal_usina.columns == [
-        "usina_id",
-        "mes",
-        "geracao_verificada_mwh",
-        "energia_cortada_mwh",
-        "percentual_corte",
-        "corte_rel_mwh",
-        "corte_cnf_mwh",
-        "corte_ene_mwh",
-        "corte_outros_mwh",
-        "perda_estimada_brl",
-        "base_preco",
-        "horas_restritas",
-        "percentual_corte_medio_uf",
-        "posicao_nacional",
-        "posicao_uf",
+    assert tables.plant_monthly.columns == [
+        "plant_id",
+        "month",
+        "verified_generation_mwh",
+        "curtailed_mwh",
+        "curtailment_pct",
+        "curtailed_rel_mwh",
+        "curtailed_cnf_mwh",
+        "curtailed_ene_mwh",
+        "curtailed_other_mwh",
+        "estimated_loss_brl",
+        "price_basis",
+        "restricted_hours",
+        "state_avg_curtailment_pct",
+        "national_rank",
+        "state_rank",
     ]
-    assert tables.mensal_sin.columns[:3] == ["subsistema", "fonte", "mes"]
-    assert tables.usina.columns == [
+    assert tables.subsystem_monthly.columns[:3] == ["subsystem", "source", "month"]
+    assert tables.plant.columns == [
         "id",
-        "tipo",
-        "nome",
+        "kind",
+        "name",
         "slug",
-        "fonte",
-        "uf",
-        "subsistema",
-        "conjunto_id",
+        "source",
+        "state",
+        "subsystem",
+        "cluster_id",
         "ceg",
-        "potencia_mw",
-        "ponto_conexao",
-        "agente_operador",
+        "capacity_mw",
+        "connection_point",
+        "operator",
     ]
