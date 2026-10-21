@@ -275,8 +275,11 @@ def run_publish(period: Period, settings: Settings) -> Manifest:
         lake.write_parquet(df, _monthly_key("gold", name, period))
 
     with Warehouse(settings.warehouse_dsn).session() as session:
+        session.lock("publish")
         for kind in ("cluster", "plant"):
-            session.upsert("plant", tables.plant.filter(pl.col("kind") == kind), keys=["id"])
+            session.upsert(
+                "plant", tables.plant.filter(pl.col("kind") == kind), keys=["id"], keep=["slug"]
+            )
         for name in (
             "plant_monthly_curtailment",
             "state_monthly_curtailment",

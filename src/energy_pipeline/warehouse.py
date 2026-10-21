@@ -72,19 +72,23 @@ class Session:
         log.info("%s: replaced %d rows with %d rows", table, deleted, df.height)
         return df.height
 
+    def lock(self, name: str) -> None:
+        self.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (name,))
+
     def upsert(
         self,
         table: str,
         df: pl.DataFrame,
         *,
         keys: Sequence[str],
+        keep: Sequence[str] = (),
         touch_column: str | None = "updated_at",
     ) -> int:
         stage = self._stage(table, df)
         assignments = [
             sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(column))
             for column in df.columns
-            if column not in keys
+            if column not in keys and column not in keep
         ]
         if touch_column:
             assignments.append(sql.SQL("{} = now()").format(sql.Identifier(touch_column)))
