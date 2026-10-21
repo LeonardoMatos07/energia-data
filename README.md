@@ -164,6 +164,14 @@ make reconcile FROM=2021-10 TO=2026-09
 
 It sums the official non-realized generation (GNRa) of every month from the bronze files and compares it with the totals published per subsystem, state and plant. It exits with an error if any deviation exceeds `RECONCILIATION_TOLERANCE` (1% by default).
 
+Generate the monthly report from the published data (a draft unless `--publish` is passed):
+
+```bash
+python -m energy_pipeline.report --month 2026-09 --submit
+```
+
+It prints the Markdown report and a LinkedIn post, and with `--submit` saves it through `POST /v1/admin/reports` (needs `API_URL`).
+
 | Service | Address | Credentials |
 |---|---|---|
 | Airflow | http://localhost:8080 | `airflow` / `airflow` |
