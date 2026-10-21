@@ -10,7 +10,7 @@ dependencies = ["polars==1.20.0"]
 local = [
     "boto3==1.36.0",
     "psycopg2-binary==2.9.10",
-    "requests==2.32.3",
+    "requests==2.34.2",
 ]
 
 [dependency-groups]
@@ -19,7 +19,7 @@ dev = [
     "pytest==8.3.4",
     "ruff==0.9.6",
     "types-psycopg2==2.9.21.20241019",
-    "types-requests==2.32.0.20241016",
+    "types-requests==2.33.0.20260906",
 ]
 
 [tool.uv]

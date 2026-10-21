@@ -1,72 +1,184 @@
-name: CI
+name: pipeline
 
 on:
-  pull_request:
   push:
-    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.12.21"
+  TRIVY_VERSION: "v0.75.0"
+  IMAGE_NAME: energia-data
+
 jobs:
-  checks:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
-          version: "0.12.21"
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --frozen --extra local
-      - name: Lint
-        run: uv run ruff check .
-      - name: Format
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+      - name: ruff format --check
         run: uv run ruff format --check .
-      - name: Types
+
+  types:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen --extra local
+      - name: mypy
         run: uv run mypy
-      - name: Tests
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen --extra local
+      - name: pytest
         run: uv run pytest -v
 
-  image:
+  dependency-audit:
+    name: Dependency audit
     runs-on: ubuntu-latest
-    needs: checks
     steps:
-      - uses: actions/checkout@v4
-      - name: Build the Airflow image
-        run: docker build -t energia-data:ci .
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Export the locked runtime dependencies
+        run: uv export --frozen --no-dev --extra local --no-emit-project --format requirements-txt -o requirements.txt
+      - name: pip-audit
+        run: uvx pip-audit==2.10.1 -r requirements.txt --require-hashes --disable-pip --progress-spinner off
+
+  repo-scan:
+    name: Secrets and misconfiguration scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  image:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AIRFLOW_INSTANCE_ID != '' }}
+    outputs:
+      published: ${{ steps.publish.outputs.enabled }}
+    steps:
+      - id: publish
+        run: echo "enabled=$PUBLISH" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - name: Build
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Check that the DAGs import cleanly
         run: |
           for dag in ons_grid_pipeline ons_curtailment_pipeline; do
             docker run --rm -e CONNECTION_CHECK_MAX_COUNT=0 \
-              -v "$PWD/dags:/opt/airflow/dags" energia-data:ci \
+              -v "$PWD/dags:/opt/airflow/dags" "$IMAGE_NAME:$GITHUB_SHA" \
               python "/opt/airflow/dags/$dag.py"
           done
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: AWS credentials
+        if: env.PUBLISH == 'true'
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'sa-east-1' }}
+      - name: ECR login
+        if: env.PUBLISH == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+      - name: Push the image tagged with the commit SHA
+        if: env.PUBLISH == 'true'
+        env:
+          TARGET: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY || 'energia-data' }}:${{ github.sha }}
+        run: |
+          docker tag "$IMAGE_NAME:$GITHUB_SHA" "$TARGET"
+          docker push "$TARGET"
+          echo "Pushed \`$TARGET\`" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Deploy to production
+    needs: [lint, types, test, dependency-audit, repo-scan, image]
+    if: needs.image.outputs.published == 'true'
     runs-on: ubuntu-latest
-    needs: image
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
+    env:
+      INSTANCE_ID: ${{ vars.AIRFLOW_INSTANCE_ID }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: sa-east-1
-      - id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and push to ECR
-        env:
-          IMAGE: ${{ steps.ecr.outputs.registry }}/energia-data
+          aws-region: ${{ vars.AWS_REGION || 'sa-east-1' }}
+      - name: Run deploy.sh on the Airflow instance
         run: |
-          docker build -t "$IMAGE:${GITHUB_SHA}" -t "$IMAGE:latest" .
-          docker push --all-tags "$IMAGE"
-      - name: Deploy to the Airflow instance (SSM)
-        run: |
-          aws ssm send-command \
-            --instance-ids "${{ vars.AIRFLOW_INSTANCE_ID }}" \
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
-            --comment "energia-data ${GITHUB_SHA}" \
-            --parameters 'commands=["cd /opt/energia-data && ./deploy.sh '"${GITHUB_SHA}"'"]'
+            --comment "energia-data $GITHUB_SHA" \
+            --parameters "commands=[\"cd /opt/energia-data && ./deploy.sh $GITHUB_SHA\"]" \
+            --query Command.CommandId --output text)"
+          echo "SSM command: $command_id"
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$INSTANCE_ID" || true
+          status="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query Status --output text)"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text
+          if [ "$status" != "Success" ]; then
+            echo "::error::deploy.sh finished with status $status"
+            exit 1
+          fi
+          echo "Deployed \`$GITHUB_SHA\` to the Airflow instance" >> "$GITHUB_STEP_SUMMARY"

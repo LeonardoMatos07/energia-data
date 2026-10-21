@@ -206,9 +206,33 @@ make check
 
 `make check` runs ruff check, mypy, pytest and ruff format --check. The tests cover reading,
 deduplication, the reason split, allocation, reconciliation, pricing and gap filling, the
-portal aggregates and revalidation, using real rows from the ONS files as fixtures. CI also
-builds the Airflow image and checks that the DAGs import. On merge to `main`, the image goes
-to ECR and is deployed to the Airflow EC2 instance through SSM (`deploy.sh`).
+portal aggregates and revalidation, using real rows from the ONS files as fixtures.
+
+### Pipeline and deployment
+
+`.github/workflows/ci.yml` runs on every push, pull request and manual run (*Actions → pipeline
+→ Run workflow*):
+
+| Job | What it checks |
+|---|---|
+| Lint | `ruff check` and `ruff format --check` |
+| Type check | `mypy` |
+| Tests | `pytest` |
+| Dependency audit | `pip-audit` over the locked dependencies (including the `local` extra) |
+| Secrets and misconfiguration scan | Trivy over the repository |
+| Build and scan image | Builds the Airflow image, imports both DAGs inside it and scans it with Trivy (HIGH/CRITICAL with a fix available) |
+
+On `main`, once `AIRFLOW_INSTANCE_ID` is set, the scanned image is pushed to ECR with the commit
+SHA, and **Deploy to production** waits for approval in the `production` environment. After
+approval it runs `deploy.sh <sha>` on the Airflow instance through SSM and fails if the command
+does not succeed. Required settings: secret `AWS_ROLE_ARN`; variables `AWS_REGION`,
+`ECR_REPOSITORY`, `AIRFLOW_INSTANCE_ID`; environment `production` with required reviewers.
+
+The `Dockerfile` hardens the official Airflow image: it applies the Debian security updates,
+removes components the project does not use (the Google provider with `ray` and its Java jars,
+the Docker CLI, `pip` and its vendored libraries, the `prek` tool) and pins patched versions of
+the Python packages the base image ships with known vulnerabilities. Dependabot proposes weekly
+updates with a 14-day cooldown.
 
 ---
 
