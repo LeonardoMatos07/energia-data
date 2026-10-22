@@ -270,6 +270,7 @@ def run_publish(period: Period, settings: Settings) -> Manifest:
         "plant_monthly_curtailment": tables.plant_monthly,
         "state_monthly_curtailment": tables.state_monthly,
         "subsystem_monthly_curtailment": tables.subsystem_monthly,
+        "hourly_curtailment": tables.hourly,
     }
     for name, df in outputs.items():
         lake.write_parquet(df, _monthly_key("gold", name, period))
@@ -284,6 +285,7 @@ def run_publish(period: Period, settings: Settings) -> Manifest:
             "plant_monthly_curtailment",
             "state_monthly_curtailment",
             "subsystem_monthly_curtailment",
+            "hourly_curtailment",
         ):
             session.replace_range(
                 name,

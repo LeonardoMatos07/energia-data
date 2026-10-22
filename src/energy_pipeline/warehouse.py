@@ -19,6 +19,7 @@ REQUIRED_TABLES = [
     "plant_monthly_curtailment",
     "state_monthly_curtailment",
     "subsystem_monthly_curtailment",
+    "hourly_curtailment",
     "load_run",
 ]
 

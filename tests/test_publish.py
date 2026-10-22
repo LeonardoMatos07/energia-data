@@ -186,3 +186,31 @@ def test_columns_follow_the_api_contract(tables):
         "connection_point",
         "operator",
     ]
+
+
+def test_hourly_profile_adds_up_to_the_monthly_totals(tables):
+    hourly = tables.hourly
+    national = hourly.filter((pl.col("subsystem") == "SIN") & (pl.col("source") == "total"))
+    monthly = tables.subsystem_monthly.filter(
+        (pl.col("subsystem") == "SIN") & (pl.col("source") == "total")
+    )
+
+    assert national["curtailed_mwh"].sum() == pytest.approx(monthly["curtailed_mwh"].item())
+    assert national["generation_mwh"].sum() == pytest.approx(
+        monthly["verified_generation_mwh"].item()
+    )
+    assert hourly["month"].unique().to_list() == [SEPTEMBER.start.date()]
+    assert set(hourly["day_type"]) <= {"weekday", "weekend"}
+    assert 0 <= hourly["hour"].min() and hourly["hour"].max() <= 23
+    assert hourly["days"].min() >= 1
+
+
+def test_hourly_profile_puts_a_tuesday_noon_cut_on_weekday_hour_12(tables):
+    noon = tables.hourly.filter(
+        (pl.col("subsystem") == "SIN")
+        & (pl.col("source") == "total")
+        & (pl.col("day_type") == "weekday")
+        & (pl.col("hour") == 12)
+    )
+    assert noon.height == 1
+    assert noon["curtailed_mwh"].item() > 0

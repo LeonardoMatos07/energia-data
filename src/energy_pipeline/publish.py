@@ -25,6 +25,7 @@ class MonthlyTables:
     plant_monthly: pl.DataFrame
     state_monthly: pl.DataFrame
     subsystem_monthly: pl.DataFrame
+    hourly: pl.DataFrame
 
 
 def slugify(text: str) -> str:
@@ -178,6 +179,47 @@ def _regional(clusters: pl.DataFrame, plants: pl.DataFrame, region: str) -> pl.D
     )
 
 
+HOURLY_KEYS = ["subsystem", "day_type", "hour"]
+WEEKEND_FIRST_WEEKDAY = 6
+
+
+def build_hourly_profile(period: Period, clusters: pl.DataFrame) -> pl.DataFrame:
+    base = clusters.select(
+        "source",
+        "subsystem",
+        pl.col("measured_at").dt.hour().cast(pl.Int16).alias("hour"),
+        pl.col("measured_at").dt.date().alias("day"),
+        pl.when(pl.col("measured_at").dt.weekday() >= WEEKEND_FIRST_WEEKDAY)
+        .then(pl.lit("weekend"))
+        .otherwise(pl.lit("weekday"))
+        .alias("day_type"),
+        "curtailed_mwh",
+        "generation_mwh",
+    )
+    days = base.group_by("day_type").agg(pl.col("day").n_unique().cast(pl.Int32).alias("days"))
+    national = base.with_columns(pl.lit("SIN").alias("subsystem"))
+    sums = [
+        pl.col("curtailed_mwh").sum().round(3),
+        pl.col("generation_mwh").sum().round(3),
+    ]
+    return (
+        _with_total_source(pl.concat([base, national]), HOURLY_KEYS, sums)
+        .join(days, on="day_type")
+        .with_columns(pl.lit(period.start.date()).alias("month"))
+        .select(
+            "subsystem",
+            "source",
+            "month",
+            "day_type",
+            "hour",
+            "curtailed_mwh",
+            "generation_mwh",
+            "days",
+        )
+        .sort("subsystem", "source", "day_type", "hour")
+    )
+
+
 def build_monthly_tables(
     period: Period,
     clusters: pl.DataFrame,
@@ -263,4 +305,5 @@ def build_monthly_tables(
         subsystem_monthly=finish(
             subsystem_monthly, ["subsystem", "source"], ["affected_plants"]
         ).sort("subsystem", "source"),
+        hourly=build_hourly_profile(period, clusters),
     )
