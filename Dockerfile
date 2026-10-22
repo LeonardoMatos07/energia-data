@@ -22,7 +22,7 @@ RUN uv export --project /tmp/project --frozen --no-dev --no-emit-project --no-ha
         tornado==6.5.9 \
         urllib3==2.8.0 \
         uv==0.13.4 \
-        virtualenv==21.7.13 \
+        virtualenv==21.14.7 \
     && pip uninstall --yes pip \
     && rm -rf /home/airflow/.local/share/uv/tools /tmp/requirements.txt
 
