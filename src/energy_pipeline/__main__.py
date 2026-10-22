@@ -41,7 +41,7 @@ def print_summary(manifests: list[steps.Manifest]) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="energy_pipeline", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(prog="energy_pipeline", description="Run the energy data pipelines.")
     parser.add_argument("pipeline", choices=sorted(PIPELINES))
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--month", type=Period.parse, help="single month, YYYY-MM")
