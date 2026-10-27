@@ -1,5 +1,5 @@
 [project]
-name = "energia-data"
+name = "energy-data"
 version = "0.1.0"
 description = "Data pipelines of the platform: ONS ingestion, data lake and aggregate loading"
 readme = "README.md"

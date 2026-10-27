@@ -1,22 +1,22 @@
-# energia-data
+# energy-data
 
 ![CI](../../actions/workflows/ci.yml/badge.svg)
 
-> **Private repository.** Data pipelines of the energy intelligence platform (product name to
-> be defined). Part of Phase 1: the public curtailment monitor.
+> Data pipelines of **Spillway**, the energy intelligence platform. Part of Phase 1: the public
+> wind and solar curtailment monitor.
 
-`energia-data` ingests ONS open data, standardizes and models the curtailment of wind and
+`energy-data` ingests ONS open data, standardizes and models the curtailment of wind and
 solar plants, computes the aggregates the portal reads and writes them to S3 and Postgres.
-**It only writes**: the database schema belongs to `energia-api` (Alembic), and the contract
+**It only writes**: the database schema belongs to `energy-api` (Alembic), and the contract
 between the repositories is in
-[`energia-api/docs/phase1-contract.md`](../energia-api/docs/phase1-contract.md).
+[`energy-api/docs/phase1-contract.md`](https://github.com/LeonardoMatos07/energy-api/blob/main/docs/phase1-contract.md).
 
 | Repository | Role |
 |---|---|
-| **`energia-data`** | Airflow: ONS ingestion, bronze → silver → gold, Postgres load |
-| `energia-api` | FastAPI: schema owner, public reads, newsletter, admin |
-| `energia-web` | Next.js: public portal with ISR |
-| `energia-infra` | Terraform: AWS `sa-east-1` |
+| **`energy-data`** | Airflow: ONS ingestion, bronze → silver → gold, Postgres load |
+| `energy-api` | FastAPI: schema owner, public reads, newsletter, admin |
+| `energy-web` | Next.js: public portal with ISR |
+| `energy-infra` | Terraform: AWS `sa-east-1` |
 
 ---
 
@@ -34,14 +34,14 @@ flowchart LR
         S[(silver)]
         G[(gold)]
     end
-    subgraph PG["Postgres (energia-api schema)"]
+    subgraph PG["Postgres (energy-api schema)"]
         T1[(plant<br/>*_monthly_curtailment)]
         T2[(load_run)]
     end
     ONS --> E --> B --> T --> S --> P --> G
     P --> T1
     R --> T2
-    N -->|POST /v1/admin/revalidate| API[energia-api] --> WEB[energia-web]
+    N -->|POST /v1/admin/revalidate| API[energy-api] --> WEB[energy-web]
 ```
 
 | Step | Grain | What it does | Writes |
@@ -51,7 +51,7 @@ flowchart LR
 | `validate` | source × month | Quality gates; ERROR checks block the load | report in XCom |
 | `record` | source × month | Records the load | `load_run` |
 | `publish` | month | Builds the portal aggregates and loads Postgres idempotently (deletes and reinserts the month in one transaction) | `gold/`, `plant`, `*_monthly_curtailment` |
-| `notify_portal` | run | Asks `energia-api` to revalidate the portal (Cognito machine token) | — |
+| `notify_portal` | run | Asks `energy-api` to revalidate the portal (Cognito machine token) | — |
 
 The pipeline runs on the 3rd of every month and **reprocesses the last 3 months**
 (`REPROCESS_MONTHS`), because ONS revises data it has already published. Files with the same
@@ -146,7 +146,7 @@ curtailment, and not by a constant factor (1.32× the GNRa in Jan/2023, 1.10× i
 
 ### With Docker (Airflow)
 
-The repositories sit side by side (`../energia-api` is used by the `migrate` service).
+The repositories sit side by side (`../energy-api` is used by the `migrate` service).
 
 ```bash
 cp .env.example .env
@@ -185,7 +185,7 @@ It prints the Markdown report and a LinkedIn post, and with `--submit` saves it 
 
 The steps do not depend on the orchestrator, so everything runs as a CLI against any Postgres
 and S3 endpoint. This is how backfills and debugging are done locally. The schema must exist
-first: run `uv run alembic upgrade head` in `../energia-api`.
+first: run `uv run alembic upgrade head` in `../energy-api`.
 
 ```bash
 uv sync --extra local
@@ -213,7 +213,7 @@ uv run python -m energy_pipeline grid --month 2026-09
 | `LAKE_S3_ENDPOINT_URL` | SeaweedFS in Docker | Empty = AWS S3 |
 | `LAKE_BUCKET` | `energy-lake` | |
 | `WAREHOUSE_DSN` | Docker Postgres | |
-| `API_URL` | — | `energia-api` used to revalidate the portal (empty = no notification) |
+| `API_URL` | — | `energy-api` used to revalidate the portal (empty = no notification) |
 | `COGNITO_TOKEN_URL`, `DATA_CLIENT_ID`, `DATA_CLIENT_SECRET` | — | Cognito machine token (production) |
 
 ### Code quality

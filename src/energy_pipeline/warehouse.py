@@ -162,7 +162,7 @@ class Warehouse:
         missing = sorted(set(tables) - {row[0] for row in rows})
         if missing:
             raise SchemaNotReadyError(
-                f"Missing tables {missing}: run the energia-api migrations "
+                f"Missing tables {missing}: run the energy-api migrations "
                 "(alembic upgrade head) before loading data."
             )
 

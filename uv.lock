@@ -180,7 +180,7 @@ wheels = [
 ]
 
 [[package]]
-name = "energia-data"
+name = "energy-data"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

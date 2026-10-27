@@ -1,8 +1,8 @@
-name: energia-data
+name: energy-data
 
 x-airflow-common: &airflow-common
   build: .
-  image: energia-data/airflow:latest
+  image: energy-data/airflow:latest
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -92,8 +92,8 @@ services:
     restart: always
 
   migrate:
-    build: ../energia-api
-    image: energia-api:local
+    build: ../energy-api
+    image: energy-api:local
     command: ["alembic", "upgrade", "head"]
     environment:
       ENVIRONMENT: local
