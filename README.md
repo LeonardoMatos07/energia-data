@@ -18,6 +18,8 @@ between the repositories is in
 | `energy-web` | Next.js: public portal with ISR |
 | `energy-infra` | Terraform: AWS `sa-east-1` |
 
+Design decisions shared by the four repositories are recorded as [ADRs](https://github.com/LeonardoMatos07/energy-api/tree/main/docs/adr).
+
 ---
 
 ## Flow
