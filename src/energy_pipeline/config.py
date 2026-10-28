@@ -21,6 +21,7 @@ class Settings:
     data_client_id: str | None
     data_client_secret: str | None
     api_scope: str
+    dispatch_report_email: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -41,4 +42,6 @@ class Settings:
             data_client_id=os.getenv("DATA_CLIENT_ID") or None,
             data_client_secret=os.getenv("DATA_CLIENT_SECRET") or None,
             api_scope=os.getenv("API_SCOPE", "energia-api/admin"),
+            dispatch_report_email=os.getenv("DISPATCH_REPORT_EMAIL", "true").lower()
+            not in ("0", "false", "no"),
         )

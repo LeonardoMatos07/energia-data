@@ -41,3 +41,37 @@ def request_revalidation(settings: Settings, tags: list[str] = PORTAL_TAGS) -> d
     result: dict = response.json()
     log.info("Portal revalidation requested for %s: %s", tags, result)
     return result
+
+
+def request_report_dispatch(settings: Settings, period: str) -> dict:
+    """Asks the API to e-mail the month's report to the people who subscribed.
+
+    The API sends once per month and is safe to call again: a month that was already sent answers
+    409 and counts as done; one that stopped partway (`partial`) is finished with `retry`.
+    """
+    if not settings.api_url:
+        log.info("API_URL is not set; skipping the report e-mail")
+        return {"skipped": "no API_URL"}
+    token = machine_token(settings)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    url = f"{settings.api_url.rstrip('/')}/v1/admin/dispatches"
+
+    def call(retry: bool) -> requests.Response:
+        return requests.post(
+            url,
+            json={"kind": "report", "month": period, "retry": retry},
+            headers=headers,
+            timeout=settings.http_timeout_seconds,
+        )
+
+    response = call(False)
+    if response.status_code == 409:
+        if "partial" in response.text:
+            response = call(True)
+        else:
+            log.info("The %s report was already e-mailed", period)
+            return {"already_sent": period}
+    response.raise_for_status()
+    result: dict = response.json()
+    log.info("Report e-mail for %s started: %s", period, result)
+    return result
