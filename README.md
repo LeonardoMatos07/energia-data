@@ -1,24 +1,24 @@
-# energy-data
+# spillway-data
 
 ![CI](../../actions/workflows/ci.yml/badge.svg)
 
 > Data pipelines of **Spillway**, the energy intelligence platform. Part of Phase 1: the public
 > wind and solar curtailment monitor.
 
-`energy-data` ingests ONS open data, standardizes and models the curtailment of wind and
+`spillway-data` ingests ONS open data, standardizes and models the curtailment of wind and
 solar plants, computes the aggregates the portal reads and writes them to S3 and Postgres.
-**It only writes**: the database schema belongs to `energy-api` (Alembic), and the contract
+**It only writes**: the database schema belongs to `spillway-api` (Alembic), and the contract
 between the repositories is in
-[`energy-api/docs/phase1-contract.md`](https://github.com/LeonardoMatos07/energy-api/blob/main/docs/phase1-contract.md).
+[`spillway-api/docs/phase1-contract.md`](https://github.com/LeonardoMatos07/spillway-api/blob/main/docs/phase1-contract.md).
 
 | Repository | Role |
 |---|---|
-| **`energy-data`** | Airflow: ONS ingestion, bronze → silver → gold, Postgres load |
-| `energy-api` | FastAPI: schema owner, public reads, newsletter, admin |
-| `energy-web` | Next.js: public portal with ISR |
-| `energy-infra` | Terraform: AWS `sa-east-1` |
+| **`spillway-data`** | Airflow: ONS ingestion, bronze → silver → gold, Postgres load |
+| `spillway-api` | FastAPI: schema owner, public reads, newsletter, admin |
+| `spillway-web` | Next.js: public portal with ISR |
+| `spillway-infra` | Terraform: AWS `sa-east-1` |
 
-Design decisions shared by the four repositories are recorded as [ADRs](https://github.com/LeonardoMatos07/energy-api/tree/main/docs/adr).
+Design decisions shared by the four repositories are recorded as [ADRs](https://github.com/LeonardoMatos07/spillway-api/tree/main/docs/adr).
 
 ---
 
@@ -36,14 +36,14 @@ flowchart LR
         S[(silver)]
         G[(gold)]
     end
-    subgraph PG["Postgres (energy-api schema)"]
+    subgraph PG["Postgres (spillway-api schema)"]
         T1[(plant<br/>*_monthly_curtailment)]
         T2[(load_run)]
     end
     ONS --> E --> B --> T --> S --> P --> G
     P --> T1
     R --> T2
-    N -->|POST /v1/admin/revalidate| API[energy-api] --> WEB[energy-web]
+    N -->|POST /v1/admin/revalidate| API[spillway-api] --> WEB[spillway-web]
 ```
 
 | Step | Grain | What it does | Writes |
@@ -53,7 +53,7 @@ flowchart LR
 | `validate` | source × month | Quality gates; ERROR checks block the load | report in XCom |
 | `record` | source × month | Records the load | `load_run` |
 | `publish` | month | Builds the portal aggregates and loads Postgres idempotently (deletes and reinserts the month in one transaction) | `gold/`, `plant`, `*_monthly_curtailment` |
-| `notify_portal` | run | Asks `energy-api` to revalidate the portal (Cognito machine token) | — |
+| `notify_portal` | run | Asks `spillway-api` to revalidate the portal (Cognito machine token) | — |
 
 The pipeline runs on the 3rd of every month and **reprocesses the last 3 months**
 (`REPROCESS_MONTHS`), because ONS revises data it has already published. Files with the same
@@ -148,7 +148,7 @@ curtailment, and not by a constant factor (1.32× the GNRa in Jan/2023, 1.10× i
 
 ### With Docker (Airflow)
 
-The repositories sit side by side (`../energy-api` is used by the `migrate` service).
+The repositories sit side by side (`../spillway-api` is used by the `migrate` service).
 
 ```bash
 cp .env.example .env
@@ -187,7 +187,7 @@ It prints the Markdown report and a LinkedIn post, and with `--submit` saves it 
 
 The steps do not depend on the orchestrator, so everything runs as a CLI against any Postgres
 and S3 endpoint. This is how backfills and debugging are done locally. The schema must exist
-first: run `uv run alembic upgrade head` in `../energy-api`.
+first: run `uv run alembic upgrade head` in `../spillway-api`.
 
 ```bash
 uv sync --extra local
@@ -215,7 +215,7 @@ uv run python -m energy_pipeline grid --month 2026-09
 | `LAKE_S3_ENDPOINT_URL` | SeaweedFS in Docker | Empty = AWS S3 |
 | `LAKE_BUCKET` | `energy-lake` | |
 | `WAREHOUSE_DSN` | Docker Postgres | |
-| `API_URL` | — | `energy-api` used to revalidate the portal (empty = no notification) |
+| `API_URL` | — | `spillway-api` used to revalidate the portal (empty = no notification) |
 | `COGNITO_TOKEN_URL`, `DATA_CLIENT_ID`, `DATA_CLIENT_SECRET` | — | Cognito machine token (production) |
 
 ### Code quality

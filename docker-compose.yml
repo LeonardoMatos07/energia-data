@@ -92,7 +92,7 @@ services:
     restart: always
 
   migrate:
-    build: ../energy-api
+    build: ../spillway-api
     image: energy-api:local
     command: ["alembic", "upgrade", "head"]
     environment:
