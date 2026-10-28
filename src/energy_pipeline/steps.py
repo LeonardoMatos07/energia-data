@@ -310,3 +310,42 @@ def run_publish(period: Period, settings: Settings) -> Manifest:
 
 def notify_portal(settings: Settings) -> Manifest:
     return notify.request_revalidation(settings)
+
+
+def publish_reports(periods: list[str], settings: Settings) -> Manifest:
+    """Writes and publishes the report of every month that was processed (a month without data
+    is skipped), then asks the portal to refresh its report pages."""
+    from energy_pipeline import report
+
+    saved: list[str] = []
+    for value in periods:
+        try:
+            built = report.build_report(report.fetch_report_data(settings, Period.parse(value)))
+        except LookupError as error:
+            log.info("No report for %s: %s", value, error)
+            continue
+        report.submit(settings, built, publish=True)
+        saved.append(built.slug)
+    if saved:
+        notify.request_revalidation(settings, ["reports"])
+    return {"published": saved}
+
+
+def month_to_announce(periods: list[str], run_date: datetime, backfill: bool) -> str | None:
+    """The month whose report is e-mailed after a load: the previous month of a regular monthly
+    run. A backfill or a re-run of old months never mails anyone."""
+    if backfill or not periods:
+        return None
+    newest = max(Period.parse(value) for value in periods)
+    return str(newest) if newest == Period.from_datetime(run_date).previous() else None
+
+
+def announce_report(
+    periods: list[str], run_date: datetime, backfill: bool, settings: Settings
+) -> Manifest:
+    month = month_to_announce(periods, run_date, backfill)
+    if month is None:
+        return {"skipped": "not the monthly run for the latest month"}
+    if not settings.dispatch_report_email:
+        return {"skipped": "DISPATCH_REPORT_EMAIL is off"}
+    return notify.request_report_dispatch(settings, month)
