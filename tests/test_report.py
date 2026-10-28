@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
+
 from energy_pipeline.period import Period
 from energy_pipeline.report import (
+    HistoryPoint,
     RankedPlant,
     RankedState,
     ReportData,
@@ -27,6 +31,11 @@ def data(**overrides: object) -> ReportData:
         "reasons_mwh": {"rel": 500.0, "cnf": 1500.0, "ene": 3000.0, "other": 0.0},
         "states": [RankedState("RN", 3000.0, 40.0)],
         "plants": [RankedPlant("Cumaru I", "cumaru-i-x", "wind", "RN", 1000.0, 70.0)],
+        "history": [
+            HistoryPoint(Period(2026, 7), 3000.0, 1800.0, 1200.0),
+            HistoryPoint(Period(2026, 8), 4000.0, 2400.0, 1600.0),
+            HistoryPoint(Period(2026, 9), 5000.0, 3000.0, 2000.0),
+        ],
     }
     return ReportData(**{**values, **overrides})  # type: ignore[arg-type]
 
@@ -61,3 +70,43 @@ def test_linkedin_post_links_to_the_report() -> None:
     assert linkedin_post(report, "https://example.org/").endswith(
         "Relatório completo: https://example.org/relatorios/curtailment-2026-09\n"
     )
+
+
+def charts(content: str) -> list[dict[str, object]]:
+    blocks = re.findall(r"```chart\n(.*?)\n```", content, flags=re.DOTALL)
+    return [json.loads(block) for block in blocks]
+
+
+def test_report_has_a_chart_for_the_trend_the_sources_the_regions_and_the_reasons() -> None:
+    found = charts(build_report(data()).content)
+
+    assert [c["title"] for c in found] == [
+        "Energia cortada nos últimos 3 meses",
+        "Eólica e solar, mês a mês",
+        "Energia cortada por subsistema em setembro de 2026",
+        "Motivos do corte em setembro de 2026",
+    ]
+    trend = found[0]
+    assert trend["labels"] == ["jul/26", "ago/26", "set/26"]
+    assert trend["series"] == [{"name": "Energia cortada", "values": [3.0, 4.0, 5.0]}]
+    assert found[1]["type"] == "stacked-bar"
+    assert [s["name"] for s in found[1]["series"]] == ["Eólica", "Solar"]  # type: ignore[index]
+
+
+def test_charts_use_the_unit_of_the_text_and_drop_empty_reasons() -> None:
+    found = charts(build_report(data()).content)
+
+    assert all(c["unit"] == "GWh" for c in found)
+    assert found[3]["labels"] == [
+        "Razão energética",
+        "Indisponibilidade externa",
+        "Confiabilidade elétrica",
+    ]
+
+
+def test_report_without_history_still_builds_without_the_trend_charts() -> None:
+    titles = [c["title"] for c in charts(build_report(data(history=[])).content)]
+    assert titles == [
+        "Energia cortada por subsistema em setembro de 2026",
+        "Motivos do corte em setembro de 2026",
+    ]
