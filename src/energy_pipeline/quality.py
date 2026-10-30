@@ -19,6 +19,8 @@ MAX_PLANT_GENERATION_MWH = 15_000
 MAX_UNIT_CAPACITY_MW = 2_000
 MAX_SUBSYSTEM_LOAD_MW = 150_000
 MAX_CMO_BRL_MWH = 10_000
+MAX_BRAZIL_LOAD_MW = 250_000
+GENERATION_NOISE_MW = 1.0
 RESTRICTION_REASONS = {"REL", "CNF", "ENE", "PAR"}
 
 
@@ -129,6 +131,35 @@ def load_curve_checks(
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
         between(df, "load_mw_avg", 0, MAX_SUBSYSTEM_LOAD_MW),
         completeness(df, len(SUBSYSTEMS) * period.hours, minimum_ratio=0.98),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+ENERGY_BALANCE_SOURCES = ["hydro_mw_avg", "thermal_mw_avg", "wind_mw_avg", "solar_mw_avg"]
+
+
+def energy_balance_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["subsystem_id", "measured_at"]),
+        unique(df, ["subsystem_id", "measured_at"]),
+        within_period(df, "measured_at", period),
+        # the ONS file also carries the national total ("SIN"), which is derived in the gold layer
+        accepted_values(df, "subsystem_id", SUBSYSTEMS | {"SIN"}),
+        # night-time solar readings drift slightly below zero (seen: -0.16 MW); that is noise
+        *[
+            between(df, column, -GENERATION_NOISE_MW, MAX_BRAZIL_LOAD_MW)
+            for column in ENERGY_BALANCE_SOURCES
+        ],
+        between(df, "load_mw_avg", 0, MAX_BRAZIL_LOAD_MW),
+        completeness(
+            df.filter(pl.col("subsystem_id") != "SIN"),
+            len(SUBSYSTEMS) * period.hours,
+            minimum_ratio=0.98,
+        ),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 

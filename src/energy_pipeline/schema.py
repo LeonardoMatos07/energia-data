@@ -82,6 +82,17 @@ SCHEMAS: dict[str, dict[str, str]] = {
         "id_estado": "text",
         "val_geracao": "float",
     },
+    "energy_balance": {
+        "id_subsistema": "text",
+        "nom_subsistema": "text",
+        "din_instante": "timestamp",
+        "val_gerhidraulica": "float",
+        "val_gertermica": "float",
+        "val_gereolica": "float",
+        "val_gersolar": "float",
+        "val_carga": "float",
+        "val_intercambio": "float",
+    },
     "generation_capacity": {
         "cod_equipamento": "text",
         "nom_unidadegeradora": "text",

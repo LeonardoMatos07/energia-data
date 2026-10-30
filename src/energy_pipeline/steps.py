@@ -8,10 +8,20 @@ from typing import Any
 
 import polars as pl
 
-from energy_pipeline import curtailment, extract, notify, publish, quality, schema, transform
+from energy_pipeline import (
+    curtailment,
+    extract,
+    notify,
+    publish,
+    quality,
+    schema,
+    system,
+    transform,
+)
 from energy_pipeline.config import Settings
 from energy_pipeline.period import Period
 from energy_pipeline.sources import (
+    ENERGY_BALANCE,
     GENERATION_CAPACITY,
     LOAD_CURVE,
     MARGINAL_COST,
@@ -124,6 +134,8 @@ def _standardize(
     match source.name:
         case LOAD_CURVE.name:
             return transform.transform_load_curve(raw, period)
+        case ENERGY_BALANCE.name:
+            return transform.transform_energy_balance(raw, period)
         case PLANT_GENERATION.name:
             return transform.transform_plant_generation(raw, period)
         case GENERATION_CAPACITY.name:
@@ -211,6 +223,8 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
 
     if source_name == LOAD_CURVE.name:
         results = quality.load_curve_checks(df, period, rejected, max_rejected)
+    elif source_name == ENERGY_BALANCE.name:
+        results = quality.energy_balance_checks(df, period, rejected, max_rejected)
     elif source_name == PLANT_GENERATION.name:
         results = quality.plant_generation_checks(
             df, period, rejected, manifest["missing_measurements"], max_rejected
@@ -272,7 +286,74 @@ def _read_curtailment(lake: Lake, period: Period, names: list[str]) -> pl.DataFr
     return pl.concat(frames, how="diagonal_relaxed") if frames else None
 
 
-def run_publish(period: Period, settings: Settings) -> Manifest:
+def _read_if_applicable(lake: Lake, name: str, period: Period) -> pl.DataFrame | None:
+    if period not in SOURCES[name].periods_to_process([period]):
+        return None
+    key = _monthly_key("silver", name, period)
+    return lake.read_parquet(key) if lake.metadata(key) is not None else None
+
+
+def run_publish_system(period: Period, settings: Settings) -> Manifest:
+    started_at = _now()
+    lake = _lake(settings)
+    balance = _read_if_applicable(lake, ENERGY_BALANCE.name, period)
+    plants = _read_if_applicable(lake, PLANT_GENERATION.name, period)
+    if balance is None and plants is None:
+        log.info("No system data for %s; nothing to publish", period)
+        return {"period": str(period), "published": False}
+    has_capacity = lake.metadata(CAPACITY_LATEST_KEY) is not None
+    capacity = lake.read_parquet(CAPACITY_LATEST_KEY) if has_capacity else None
+
+    tables = system.build_system_tables(period, balance, plants, capacity)
+    outputs = {
+        "subsystem_hourly_balance": tables.hourly_balance,
+        "subsystem_monthly_generation": tables.monthly_generation,
+        "power_plant": tables.power_plant,
+        "plant_monthly_generation": tables.plant_monthly,
+    }
+    built = {name: df for name, df in outputs.items() if df is not None}
+    for name, df in built.items():
+        lake.write_parquet(df, _monthly_key("gold", name, period))
+
+    start, end = period.start, period.end
+    with Warehouse(settings.warehouse_dsn).session() as session:
+        session.lock("publish_system")
+        if "power_plant" in built:
+            session.upsert("power_plant", built["power_plant"], keys=["id"], keep=["slug"])
+        if "subsystem_hourly_balance" in built:
+            session.replace_range(
+                "subsystem_hourly_balance",
+                built["subsystem_hourly_balance"],
+                column="hour",
+                start=start,
+                end=end,
+            )
+        for name in ("subsystem_monthly_generation", "plant_monthly_generation"):
+            if name in built:
+                session.replace_range(
+                    name, built[name], column="month", start=start.date(), end=end.date()
+                )
+
+    rows = {name: df.height for name, df in built.items()}
+    detail = ", ".join(f"{name}: {count}" for name, count in rows.items())
+    if tables.warnings:
+        log.warning("System checks for %s: %s", period, "; ".join(tables.warnings))
+        detail += "\n" + "\n".join(tables.warnings)
+    Warehouse(settings.warehouse_dsn).record_load(
+        dataset="system_aggregates",
+        status="success",
+        started_at=started_at,
+        finished_at=_now(),
+        period=period.start.date(),
+        rows=sum(rows.values()),
+        detail=detail,
+    )
+    return {"period": str(period), "published": True, "rows": rows, "warnings": tables.warnings}
+
+
+def run_publish(period: Period, settings: Settings, pipeline: str = "curtailment") -> Manifest:
+    if pipeline == "system":
+        return run_publish_system(period, settings)
     started_at = _now()
     lake = _lake(settings)
     clusters = _read_curtailment(lake, period, sorted(CLUSTER_SOURCES))
