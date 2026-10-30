@@ -65,3 +65,16 @@ Cada CSV anual tem cerca de 1 MB, então o backfill completo fica abaixo de 20 M
 ## Perguntas ao usuário
 
 - Os conjuntos por agente (fator de alavancagem, penalidades) ficaram de fora. Publicá-los por empresa exige decisão sua.
+
+## Mercado livre (agregados do mercado, sem identificar agentes)
+
+Buscas no catálogo (`consumo`, `mercado livre`, `agente`, `contrato`) mostraram dezenas de conjuntos. Todos os verificados têm a mesma licença **CC BY 4.0** e atualização mensal.
+
+| Conjunto | Conteúdo | Arquivos | Decisão |
+|---|---|---|---|
+| `consumo_mensal_ambiente_comercializacao` | Consumo mensal no ambiente regulado (ACR) e no livre (ACL), em MWmed. Colunas: `MES_REFERENCIA`, `CONSUMO_TOTAL_ACR`, `CONSUMO_TOTAL_ACL` | CSV por ano, 2023 a 2026 | **Entra** |
+| `agente_qtd_contabilizacao` | Quantidade de agentes por classe (autoprodutor, comercializador, consumidor especial...). Colunas: `MES_REFERENCIA`, `CLASSE`, `QUANTIDADE_AGENTE_CONTABILIZACAO` | CSV por ano, 2023 a 2026 | **Entra** |
+| `consumo_horario_submercado`, `contrato_montante_submercado_horario`, `sumario_mensal_compra_venda_submercado` | Agregados por submercado | Não lidos | Candidatos, pendentes de leitura |
+| `consumo_*_perfil_agente`, `consumo_classe_agente`, `contabilizacao_*_agente`, `lista_agente_associado`, `rrh_agente`, `mve_liquidar_agente_*`, `fator_alavancagem` e semelhantes | Por agente (empresas) | Não lidos | **Não entram**: identificam empresas |
+
+O `robots.txt` e o acesso são os mesmos da seção anterior (10 s entre requisições, links diretos de `pda-download`).
