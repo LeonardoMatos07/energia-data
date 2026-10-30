@@ -183,6 +183,7 @@ def every_day_has_all(df: pl.DataFrame, key: str, expected: set[str]) -> CheckRe
 MAX_STORAGE_PCT = 100.0
 MAX_RESERVOIR_STORAGE_PCT = 200.0
 MAX_ENERGY_MW = 500_000
+ENA_NOISE_MW = 50.0
 MAX_FLOW_M3S = 100_000
 MAX_SPILLED_ENERGY_MWH = 100_000
 
@@ -249,7 +250,8 @@ def reservoir_inflow_checks(
         no_nulls(df, ["reservoir_name", "day"]),
         unique(df, ["reservoir_name", "day"]),
         within_days(df, "day", period),
-        between(df, "ena_gross_mw_avg", 0, MAX_ENERGY_MW),
+        # derived from natural flows, it drifts slightly below zero (seen: -6.8 MW in 2024)
+        between(df, "ena_gross_mw_avg", -ENA_NOISE_MW, MAX_ENERGY_MW),
         between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
