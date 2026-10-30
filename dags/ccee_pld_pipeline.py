@@ -29,13 +29,20 @@ def ccee_pld_pipeline() -> None:
         return ccee.run_all(Settings.from_env(), bool(context["params"].get("backfill")))
 
     @task
+    def load_free_market() -> dict[str, Any]:
+        from energy_pipeline import market_extra
+        from energy_pipeline.config import Settings
+
+        return market_extra.run_free_market(Settings.from_env())
+
+    @task
     def notify_portal() -> dict[str, Any]:
         from energy_pipeline import notify
         from energy_pipeline.config import Settings
 
         return notify.request_revalidation(Settings.from_env(), ["market"])
 
-    load() >> notify_portal()
+    [load(), load_free_market()] >> notify_portal()
 
 
 ccee_pld_pipeline()
