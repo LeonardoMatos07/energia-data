@@ -43,7 +43,10 @@ def build_pipeline_dag(
 ) -> Any:
     sources = PIPELINES[pipeline]
     lake_asset = Asset(f"s3://energy-lake/silver/{pipeline}")
-    portal_asset = Asset("postgres://warehouse-db:5432/warehouse/public/plant_monthly_curtailment")
+    portal_table = (
+        "plant_monthly_curtailment" if pipeline == "curtailment" else f"{pipeline}_tables"
+    )
+    portal_asset = Asset(f"postgres://warehouse-db:5432/warehouse/public/{portal_table}")
 
     @dag(
         dag_id=dag_id,
@@ -120,7 +123,7 @@ def build_pipeline_dag(
         def publish(period: str) -> dict[str, Any]:
             from energy_pipeline import steps
 
-            return steps.run_publish(Period.parse(period), _settings())
+            return steps.run_publish(Period.parse(period), _settings(), pipeline)
 
         @task(outlets=[portal_asset])
         def notify_portal() -> dict[str, Any]:
@@ -163,6 +166,8 @@ def build_pipeline_dag(
             for done in recorded:
                 done >> published
             # Data first, then the report that tells the story, then the e-mail to subscribers.
-            published >> notify_portal() >> publish_reports(periods) >> announce_report(periods)
+            notified = published >> notify_portal()
+            if pipeline == "curtailment":
+                notified >> publish_reports(periods) >> announce_report(periods)
 
     return pipeline_dag()
