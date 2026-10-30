@@ -184,11 +184,17 @@ def http_fetcher(timeout: int = 60) -> ChunkFetcher:
     session = requests.Session()
     session.headers["User-Agent"] = "spillway-data rain (anonymous open-bucket read)"
 
+    cache: dict[str, bytes | None] = {}  # neighbouring reservoirs share the same blocks
+
     def fetch(key: str) -> bytes | None:
+        if key in cache:
+            return cache[key]
         response = session.get(f"{STORE_URL}/{key}", timeout=timeout)
         if response.status_code in (403, 404):
+            cache[key] = None
             return None
         response.raise_for_status()
+        cache[key] = response.content
         return response.content
 
     return fetch
