@@ -11,6 +11,7 @@ import polars as pl
 from energy_pipeline import (
     curtailment,
     extract,
+    hydrology,
     notify,
     publish,
     quality,
@@ -23,14 +24,21 @@ from energy_pipeline.period import Period
 from energy_pipeline.sources import (
     ENERGY_BALANCE,
     GENERATION_CAPACITY,
+    HYDRO_OPERATIONS,
     INTERNATIONAL_INTERCHANGE,
     LOAD_CURVE,
     MARGINAL_COST,
     NATIONAL_INTERCHANGE,
     PLANT_GENERATION,
+    RESERVOIR_INFLOW,
+    RESERVOIR_STORAGE,
+    RESERVOIRS,
     SOLAR_CLUSTER_CURTAILMENT,
     SOLAR_PLANT_CURTAILMENT,
     SOURCES,
+    SPILLED_TURBINABLE_ENERGY,
+    SUBSYSTEM_INFLOW,
+    SUBSYSTEM_STORAGE,
     THERMAL_DISPATCH,
     WIND_CLUSTER_CURTAILMENT,
     WIND_PLANT_CURTAILMENT,
@@ -50,6 +58,7 @@ CLUSTER_OF_PLANT_SOURCE = {
     SOLAR_PLANT_CURTAILMENT.name: SOLAR_CLUSTER_CURTAILMENT.name,
 }
 CAPACITY_LATEST_KEY = f"silver/{GENERATION_CAPACITY.name}/latest/data.parquet"
+RESERVOIRS_LATEST_KEY = "silver/reservoirs/latest/data.parquet"
 LOCAL_TIMEZONE = "America/Sao_Paulo"
 
 
@@ -139,6 +148,20 @@ def _standardize(
             return transform.transform_load_curve(raw, period)
         case ENERGY_BALANCE.name:
             return transform.transform_energy_balance(raw, period)
+        case RESERVOIRS.name:
+            return transform.transform_reservoirs(raw, snapshot_date)
+        case SUBSYSTEM_STORAGE.name:
+            return transform.transform_subsystem_storage(raw, period)
+        case SUBSYSTEM_INFLOW.name:
+            return transform.transform_subsystem_inflow(raw, period)
+        case RESERVOIR_STORAGE.name:
+            return transform.transform_reservoir_storage(raw, period)
+        case RESERVOIR_INFLOW.name:
+            return transform.transform_reservoir_inflow(raw, period)
+        case HYDRO_OPERATIONS.name:
+            return transform.transform_hydro_operations(raw, period)
+        case SPILLED_TURBINABLE_ENERGY.name:
+            return transform.transform_spilled_turbinable_energy(raw, period)
         case NATIONAL_INTERCHANGE.name:
             return transform.transform_national_interchange(raw, period)
         case INTERNATIONAL_INTERCHANGE.name:
@@ -202,6 +225,8 @@ def run_transform(manifest: Manifest, settings: Settings) -> Manifest:
     lake.write_parquet(silver, silver_key)
     if source.name == GENERATION_CAPACITY.name:
         lake.write_parquet(silver, CAPACITY_LATEST_KEY)
+    if source.name == RESERVOIRS.name:
+        lake.write_parquet(silver, RESERVOIRS_LATEST_KEY)
 
     quarantine_key = None
     if result.rejected.height:
@@ -234,6 +259,20 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
         results = quality.load_curve_checks(df, period, rejected, max_rejected)
     elif source_name in (NATIONAL_INTERCHANGE.name, INTERNATIONAL_INTERCHANGE.name):
         results = quality.interchange_checks(df, period, rejected, max_rejected)
+    elif source_name == RESERVOIRS.name:
+        results = quality.reservoirs_checks(df, rejected, max_rejected)
+    elif source_name == SUBSYSTEM_STORAGE.name:
+        results = quality.subsystem_storage_checks(df, period, rejected, max_rejected)
+    elif source_name == SUBSYSTEM_INFLOW.name:
+        results = quality.subsystem_inflow_checks(df, period, rejected, max_rejected)
+    elif source_name == RESERVOIR_STORAGE.name:
+        results = quality.reservoir_storage_checks(df, period, rejected, max_rejected)
+    elif source_name == RESERVOIR_INFLOW.name:
+        results = quality.reservoir_inflow_checks(df, period, rejected, max_rejected)
+    elif source_name == HYDRO_OPERATIONS.name:
+        results = quality.hydro_operations_checks(df, period, rejected, max_rejected)
+    elif source_name == SPILLED_TURBINABLE_ENERGY.name:
+        results = quality.spilled_energy_checks(df, period, rejected, max_rejected)
     elif source_name == THERMAL_DISPATCH.name:
         results = quality.thermal_dispatch_checks(df, period, rejected, max_rejected)
     elif source_name == ENERGY_BALANCE.name:
@@ -378,7 +417,74 @@ def run_publish_system(period: Period, settings: Settings) -> Manifest:
     return {"period": str(period), "published": True, "rows": rows, "warnings": tables.warnings}
 
 
+def run_publish_hydrology(period: Period, settings: Settings) -> Manifest:
+    started_at = _now()
+    lake = _lake(settings)
+    read = lambda name: _read_if_applicable(lake, name, period)  # noqa: E731
+    has_register = lake.metadata(RESERVOIRS_LATEST_KEY) is not None
+    reservoirs = lake.read_parquet(RESERVOIRS_LATEST_KEY) if has_register else None
+    inputs = {
+        "subsystem_storage": read(SUBSYSTEM_STORAGE.name),
+        "subsystem_inflow": read(SUBSYSTEM_INFLOW.name),
+        "reservoir_storage": read(RESERVOIR_STORAGE.name),
+        "reservoir_inflow": read(RESERVOIR_INFLOW.name),
+        "operations": read(HYDRO_OPERATIONS.name),
+        "spilled": read(SPILLED_TURBINABLE_ENERGY.name),
+    }
+    if reservoirs is None and all(df is None for df in inputs.values()):
+        log.info("No hydrology data for %s; nothing to publish", period)
+        return {"period": str(period), "published": False}
+
+    tables = hydrology.build_hydrology_tables(period, reservoirs=reservoirs, **inputs)
+    outputs = {
+        "reservoir": tables.reservoir,
+        "subsystem_storage_daily": tables.subsystem_storage,
+        "reservoir_daily": tables.reservoir_daily,
+        "plant_monthly_spilled_energy": tables.spilled_monthly,
+    }
+    built = {name: df for name, df in outputs.items() if df is not None}
+    for name, df in built.items():
+        lake.write_parquet(df, _monthly_key("gold", name, period))
+
+    start, end = period.start, period.end
+    with Warehouse(settings.warehouse_dsn).session() as session:
+        session.lock("publish_hydrology")
+        if "reservoir" in built:
+            session.upsert("reservoir", built["reservoir"], keys=["id"], keep=["slug"])
+        for name in ("subsystem_storage_daily", "reservoir_daily"):
+            if name in built:
+                session.replace_range(
+                    name, built[name], column="day", start=start.date(), end=end.date()
+                )
+        if "plant_monthly_spilled_energy" in built:
+            session.replace_range(
+                "plant_monthly_spilled_energy",
+                built["plant_monthly_spilled_energy"],
+                column="month",
+                start=start.date(),
+                end=end.date(),
+            )
+
+    rows = {name: df.height for name, df in built.items()}
+    detail = ", ".join(f"{name}: {count}" for name, count in rows.items())
+    if tables.warnings:
+        log.warning("Hydrology checks for %s: %s", period, "; ".join(tables.warnings))
+        detail += "\n" + "\n".join(tables.warnings)
+    Warehouse(settings.warehouse_dsn).record_load(
+        dataset="hydrology_aggregates",
+        status="success",
+        started_at=started_at,
+        finished_at=_now(),
+        period=period.start.date(),
+        rows=sum(rows.values()),
+        detail=detail,
+    )
+    return {"period": str(period), "published": True, "rows": rows, "warnings": tables.warnings}
+
+
 def run_publish(period: Period, settings: Settings, pipeline: str = "curtailment") -> Manifest:
+    if pipeline == "hydrology":
+        return run_publish_hydrology(period, settings)
     if pipeline == "system":
         return run_publish_system(period, settings)
     started_at = _now()

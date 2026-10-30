@@ -138,6 +138,80 @@ THERMAL_DISPATCH = Source(
     available_from=Period(2022, 1),
 )
 
+
+def _daily(
+    name: str, dataset: str, file_name: str, description: str, available_from: Period
+) -> Source:
+    return Source(
+        name=name,
+        ons_dataset=dataset,
+        file_pattern=file_name + "_{year}.parquet",
+        partitioning=Partitioning.YEAR,
+        description=description,
+        file_format=FileFormat.PARQUET,
+        available_from=available_from,
+    )
+
+
+# The ONS keeps the daily hydrology since 2000 (EAR, ENA) and 1970 (hydrological data); the first
+# backfill starts in 2015, the rest is a separate run (move available_from back to load it).
+HYDRO_START = Period(2015, 1)
+
+RESERVOIRS = Source(
+    name="reservoirs",
+    ons_dataset="reservatorio",
+    file_pattern="RESERVATORIOS.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Reservoir register: basin, river, levels, volumes and location.",
+    file_format=FileFormat.PARQUET,
+)
+SUBSYSTEM_STORAGE = _daily(
+    "subsystem_storage",
+    "ear_subsistema_di",
+    "EAR_DIARIO_SUBSISTEMA",
+    "Daily stored energy (EAR) per subsystem, in MW-month and percent.",
+    HYDRO_START,
+)
+SUBSYSTEM_INFLOW = _daily(
+    "subsystem_inflow",
+    "ena_subsistema_di",
+    "ENA_DIARIO_SUBSISTEMA",
+    "Daily natural inflow energy (ENA) per subsystem, in average MW and percent of the MLT.",
+    HYDRO_START,
+)
+RESERVOIR_STORAGE = _daily(
+    "reservoir_storage",
+    "ear_reservatorio_di",
+    "EAR_DIARIO_RESERVATORIOS",
+    "Daily stored energy (EAR) per reservoir.",
+    HYDRO_START,
+)
+RESERVOIR_INFLOW = _daily(
+    "reservoir_inflow",
+    "ena_reservatorio_di",
+    "ENA_DIARIO_RESERVATORIOS",
+    "Daily natural inflow energy (ENA) per reservoir.",
+    HYDRO_START,
+)
+HYDRO_OPERATIONS = _daily(
+    "hydro_operations",
+    "dados_hidrologicos_di",
+    "DADOS_HIDROLOGICOS_RES",
+    "Daily flows (inflow, outflow, turbined, spilled) and levels per reservoir.",
+    HYDRO_START,
+)
+SPILLED_TURBINABLE_ENERGY = Source(
+    name="spilled_turbinable_energy",
+    ons_dataset="energia_vertida_turbinavel_ho",
+    file_pattern="ENERGIA_VERTIDA_TURBINAVEL_{year}_{month:02d}.parquet",
+    yearly_file_pattern="ENERGIA_VERTIDA_TURBINAVEL_{year}.parquet",
+    yearly_until=Period(2023, 12),  # 2024 has both files: use the monthly ones
+    partitioning=Partitioning.MONTH,
+    description="Hourly energy spilled by hydro plants that could have been turbined.",
+    file_format=FileFormat.PARQUET,
+    available_from=HYDRO_START,
+)
+
 GENERATION_CAPACITY = Source(
     name="generation_capacity",
     ons_dataset="capacidade-geracao",
@@ -219,6 +293,15 @@ SYSTEM_SOURCES = _registry(
     INTERNATIONAL_INTERCHANGE,
     THERMAL_DISPATCH,
 )
+HYDROLOGY_SOURCES = _registry(
+    RESERVOIRS,
+    SUBSYSTEM_STORAGE,
+    SUBSYSTEM_INFLOW,
+    RESERVOIR_STORAGE,
+    RESERVOIR_INFLOW,
+    HYDRO_OPERATIONS,
+    SPILLED_TURBINABLE_ENERGY,
+)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
     GENERATION_CAPACITY,
@@ -231,5 +314,11 @@ PIPELINES: dict[str, dict[str, Source]] = {
     "grid": GRID_SOURCES,
     "curtailment": CURTAILMENT_SOURCES,
     "system": SYSTEM_SOURCES,
+    "hydrology": HYDROLOGY_SOURCES,
 }
-SOURCES: dict[str, Source] = {**GRID_SOURCES, **CURTAILMENT_SOURCES, **SYSTEM_SOURCES}
+SOURCES: dict[str, Source] = {
+    **GRID_SOURCES,
+    **CURTAILMENT_SOURCES,
+    **SYSTEM_SOURCES,
+    **HYDROLOGY_SOURCES,
+}

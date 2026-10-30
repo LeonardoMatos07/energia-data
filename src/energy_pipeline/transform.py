@@ -239,6 +239,152 @@ def transform_thermal_dispatch(raw: pl.DataFrame, period: Period) -> TransformRe
     return TransformResult(valid.sort("plant_code", "measured_at"), rejected, duplicates)
 
 
+def in_period_days_or_unparsed(column: str, period: Period) -> pl.Expr:
+    return pl.col(column).is_null() | (
+        (pl.col(column) >= period.start.date()) & (pl.col(column) < period.end.date())
+    )
+
+
+def _daily(
+    raw: pl.DataFrame, period: Period, keys: list[str], columns: list[pl.Expr]
+) -> TransformResult:
+    df = raw.select(*columns).filter(in_period_days_or_unparsed("day", period))
+    valid, rejected = split_rejected(df, ["day", *keys])
+    valid, duplicates = deduplicate(valid, [*keys, "day"])
+    return TransformResult(valid.sort(*keys, "day"), rejected, duplicates)
+
+
+def transform_reservoirs(raw: pl.DataFrame, snapshot_date: date) -> TransformResult:
+    df = raw.select(
+        parse_code("res_id").alias("reservoir_id"),
+        clean_text("nom_reservatorio").alias("name"),
+        clean_text("tip_reservatorio").alias("reservoir_type"),
+        parse_int("cod_resplanejamento").alias("planning_code"),
+        parse_int("cod_posto").alias("station_code"),
+        clean_text("nom_usina").alias("plant_name"),
+        parse_code("ceg").alias("ceg"),
+        parse_code("id_subsistema").alias("subsystem_id"),
+        clean_text("nom_ree").alias("ree"),
+        clean_text("nom_bacia").alias("basin"),
+        clean_text("nom_rio").alias("river"),
+        parse_date("dat_entrada").alias("commissioned_on"),
+        parse_float("val_cotamaxima").alias("max_level_m"),
+        parse_float("val_cotaminima").alias("min_level_m"),
+        parse_float("val_volmax").alias("max_volume_hm3"),
+        parse_float("val_volmin").alias("min_volume_hm3"),
+        parse_float("val_volutiltot").alias("useful_volume_hm3"),
+        parse_float("val_latitude").alias("latitude"),
+        parse_float("val_longitude").alias("longitude"),
+    ).with_columns(pl.lit(snapshot_date).alias("snapshot_date"))
+    valid, rejected = split_rejected(df, ["reservoir_id", "name"])
+    valid, duplicates = deduplicate(valid, ["reservoir_id"])
+    return TransformResult(valid.sort("reservoir_id"), rejected, duplicates)
+
+
+def transform_subsystem_storage(raw: pl.DataFrame, period: Period) -> TransformResult:
+    return _daily(
+        raw,
+        period,
+        ["subsystem_id"],
+        [
+            parse_code("id_subsistema").alias("subsystem_id"),
+            parse_date("ear_data").alias("day"),
+            parse_float("ear_max_subsistema").alias("storage_max_mw_month"),
+            parse_float("ear_verif_subsistema_mwmes").alias("storage_mw_month"),
+            parse_float("ear_verif_subsistema_percentual").alias("storage_pct"),
+        ],
+    )
+
+
+def transform_subsystem_inflow(raw: pl.DataFrame, period: Period) -> TransformResult:
+    return _daily(
+        raw,
+        period,
+        ["subsystem_id"],
+        [
+            parse_code("id_subsistema").alias("subsystem_id"),
+            parse_date("ena_data").alias("day"),
+            parse_float("ena_bruta_regiao_mwmed").alias("ena_gross_mw_avg"),
+            parse_float("ena_bruta_regiao_percentualmlt").alias("ena_gross_pct_mlt"),
+            parse_float("ena_armazenavel_regiao_mwmed").alias("ena_storable_mw_avg"),
+            parse_float("ena_armazenavel_regiao_percentualmlt").alias("ena_storable_pct_mlt"),
+        ],
+    )
+
+
+def transform_reservoir_storage(raw: pl.DataFrame, period: Period) -> TransformResult:
+    return _daily(
+        raw,
+        period,
+        ["reservoir_name"],
+        [
+            parse_int("cod_resplanejamento").alias("planning_code"),
+            clean_text("nom_reservatorio").alias("reservoir_name"),
+            parse_code("id_subsistema").alias("subsystem_id"),
+            parse_date("ear_data").alias("day"),
+            parse_float("ear_total_mwmes").alias("storage_mw_month"),
+            parse_float("ear_maxima_total_mwmes").alias("storage_max_mw_month"),
+            parse_float("ear_reservatorio_percentual").alias("storage_pct"),
+        ],
+    )
+
+
+def transform_reservoir_inflow(raw: pl.DataFrame, period: Period) -> TransformResult:
+    return _daily(
+        raw,
+        period,
+        ["reservoir_name"],
+        [
+            parse_int("cod_resplanejamento").alias("planning_code"),
+            clean_text("nom_reservatorio").alias("reservoir_name"),
+            parse_date("ena_data").alias("day"),
+            parse_float("ena_bruta_res_mwmed").alias("ena_gross_mw_avg"),
+            parse_float("ena_bruta_res_percentualmlt").alias("ena_gross_pct_mlt"),
+            parse_float("ena_armazenavel_res_mwmed").alias("ena_storable_mw_avg"),
+            parse_float("ena_armazenavel_res_percentualmlt").alias("ena_storable_pct_mlt"),
+        ],
+    )
+
+
+def transform_hydro_operations(raw: pl.DataFrame, period: Period) -> TransformResult:
+    return _daily(
+        raw,
+        period,
+        ["reservoir_id"],
+        [
+            parse_code("id_reservatorio").alias("reservoir_id"),
+            parse_timestamp("din_instante").dt.date().alias("day"),
+            parse_float("val_volumeutilcon").alias("useful_volume_pct"),
+            parse_float("val_vazaoafluente").alias("inflow_m3s"),
+            parse_float("val_vazaonatural").alias("natural_inflow_m3s"),
+            parse_float("val_vazaodefluente").alias("outflow_m3s"),
+            parse_float("val_vazaoturbinada").alias("turbined_m3s"),
+            parse_float("val_vazaovertida").alias("spilled_m3s"),
+            parse_float("val_nivelmontante").alias("upstream_level_m"),
+            parse_float("val_niveljusante").alias("downstream_level_m"),
+        ],
+    )
+
+
+def transform_spilled_turbinable_energy(raw: pl.DataFrame, period: Period) -> TransformResult:
+    df = raw.select(
+        parse_timestamp("din_instante").alias("measured_at"),
+        parse_code("cod_usina").alias("plant_code"),
+        clean_text("nom_reservatorio").alias("plant_name"),
+        parse_code("id_subsistema").alias("subsystem_id"),
+        clean_text("nom_bacia").alias("basin"),
+        clean_text("nom_rio").alias("river"),
+        clean_text("nom_agente").alias("agent"),
+        parse_float("val_energiavertida").alias("spilled_energy_mwh"),
+        parse_float("val_energiavertidaturbinavel").alias("spilled_turbinable_energy_mwh"),
+    ).filter(in_period_or_unparsed("measured_at", period))
+    valid, rejected = split_rejected(
+        df, ["measured_at", "plant_code", "plant_name", "spilled_turbinable_energy_mwh"]
+    )
+    valid, duplicates = deduplicate(valid, ["plant_code", "measured_at"])
+    return TransformResult(valid.sort("plant_code", "measured_at"), rejected, duplicates)
+
+
 def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformResult:
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),
