@@ -215,6 +215,14 @@ def test_power_plants_get_slug_state_and_summed_capacity():
     assert row["capacity_mw"] == 14000.0
 
 
+def test_plants_sharing_a_ceg_get_no_capacity():
+    both = pl.concat([plant_rows("ITA60", "HYDRO", 10.0), plant_rows("ITA50", "HYDRO", 10.0)])
+
+    plants = system.build_power_plants(both, capacity_frame(14000))
+
+    assert plants["capacity_mw"].to_list() == [None, None]
+
+
 def test_plant_monthly_capacity_factor_and_implausible_values():
     period = Period(2024, 2)
     plants = plant_rows("ITA1", "HYDRO", 10_000.0)

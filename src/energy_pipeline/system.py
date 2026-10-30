@@ -109,6 +109,13 @@ def build_power_plants(plants: pl.DataFrame, capacity: pl.DataFrame | None) -> p
         plants.sort("measured_at")
         .unique(subset=["plant_id"], keep="last")
         .join(_installed_capacity(capacity), on="ceg", how="left")
+        .with_columns(
+            # plants that share a CEG (e.g. the 50 Hz and 60 Hz sides of Itaipu) cannot split it
+            pl.when(pl.col("ceg").is_not_null() & (pl.len().over("ceg") > 1))
+            .then(None)
+            .otherwise(pl.col("capacity_mw"))
+            .alias("capacity_mw")
+        )
         .select(
             pl.col("plant_id").alias("id"),
             pl.col("plant_name").alias("name"),
