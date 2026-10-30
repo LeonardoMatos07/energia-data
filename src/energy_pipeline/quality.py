@@ -303,8 +303,27 @@ def spilled_energy_checks(
         no_nulls(df, ["plant_code", "measured_at"]),
         unique(df, ["plant_code", "measured_at"]),
         within_period(df, "measured_at", period),
-        between(df, "spilled_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
-        between(df, "spilled_turbinable_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
+        # historical files have odd hours: block only absurd values, warn on the rest
+        between(
+            df, "spilled_energy_mwh", -10 * MAX_SPILLED_ENERGY_MWH, 10 * MAX_SPILLED_ENERGY_MWH
+        ),
+        between(
+            df, "spilled_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH, Severity.WARN
+        ),
+        # historical files have odd hours: block only absurd values, warn on the rest
+        between(
+            df,
+            "spilled_turbinable_energy_mwh",
+            -10 * MAX_SPILLED_ENERGY_MWH,
+            10 * MAX_SPILLED_ENERGY_MWH,
+        ),
+        between(
+            df,
+            "spilled_turbinable_energy_mwh",
+            -GENERATION_NOISE_MW,
+            MAX_SPILLED_ENERGY_MWH,
+            Severity.WARN,
+        ),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 
