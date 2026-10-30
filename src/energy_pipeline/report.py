@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 import requests
 
@@ -44,6 +46,10 @@ STATE_NAMES = {
     "TO": "Tocantins",
 }  # fmt: skip
 TOP_STATES = 5
+HISTORY_MONTHS = 12
+SHORT_MONTHS = [
+    "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
+]  # fmt: skip
 TOP_PLANTS = 10
 TOTAL_COLUMNS = (
     "curtailed_mwh, verified_generation_mwh, curtailment_pct, estimated_loss_brl, affected_plants"
@@ -77,6 +83,16 @@ class RankedPlant:
 
 
 @dataclass(frozen=True)
+class HistoryPoint:
+    """National curtailment of one month, by source, for the charts."""
+
+    period: Period
+    total_mwh: float
+    wind_mwh: float | None
+    solar_mwh: float | None
+
+
+@dataclass(frozen=True)
 class ReportData:
     period: Period
     national: Totals
@@ -87,6 +103,7 @@ class ReportData:
     reasons_mwh: dict[str, float]
     states: list[RankedState]
     plants: list[RankedPlant]
+    history: list[HistoryPoint] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -171,6 +188,7 @@ def fetch_report_data(settings: Settings, period: Period) -> ReportData:
                 (month, TOP_PLANTS),
             )
         ]
+        history = _history(session, period)
         return ReportData(
             period=period,
             national=current,
@@ -181,7 +199,55 @@ def fetch_report_data(settings: Settings, period: Period) -> ReportData:
             reasons_mwh=dict(zip(REASON_NAMES, (float(value) for value in reasons), strict=True)),
             states=states,
             plants=plants,
+            history=history,
         )
+
+
+def _history(session: Any, period: Period) -> list[HistoryPoint]:
+    first = shift(period, -(HISTORY_MONTHS - 1)).start.date()
+    by_month: dict[date, dict[str, float]] = {}
+    for month, source, curtailed in session.fetchall(
+        "select month, source, curtailed_mwh from subsystem_monthly_curtailment "
+        "where subsystem = 'SIN' and month between %s and %s order by month",
+        (first, period.start.date()),
+    ):
+        by_month.setdefault(month, {})[str(source)] = float(curtailed)
+    return [
+        HistoryPoint(
+            period=Period(month.year, month.month),
+            total_mwh=values["total"],
+            wind_mwh=values.get("wind"),
+            solar_mwh=values.get("solar"),
+        )
+        for month, values in sorted(by_month.items())
+        if "total" in values
+    ]
+
+
+def chart(
+    title: str,
+    labels: list[str],
+    series: list[tuple[str, list[float]]],
+    *,
+    kind: str = "bar",
+    unit: str = "GWh",
+) -> list[str]:
+    """A fenced `chart` block: the site draws it, the PDF and the e-mail have their own
+    renderers. Values are in `unit`, rounded for display."""
+    spec = {
+        "type": kind,
+        "title": title,
+        "unit": unit,
+        "labels": labels,
+        "series": [
+            {"name": name, "values": [round(v, 1) for v in values]} for name, values in series
+        ],
+    }
+    return ["", "```chart", json.dumps(spec, ensure_ascii=False, separators=(",", ":")), "```", ""]
+
+
+def _short_month(period: Period) -> str:
+    return f"{SHORT_MONTHS[period.month - 1]}/{period.year % 100:02d}"
 
 
 def _number(value: float, digits: int = 0) -> str:
@@ -255,6 +321,12 @@ def build_report(data: ReportData) -> Report:
     ):
         if text := _comparison(now, reference):
             lines.append(f"- **Energia cortada frente {name}:** {text}")
+    if len(data.history) >= 2:
+        lines += chart(
+            f"Energia cortada nos últimos {len(data.history)} meses",
+            [_short_month(point.period) for point in data.history],
+            [("Energia cortada", [point.total_mwh / 1000 for point in data.history])],
+        )
 
     if data.by_source:
         lines += ["", "## Eólica e solar", ""]
@@ -271,6 +343,17 @@ def build_report(data: ReportData) -> Report:
             ],
             1,
         )
+        sourced = [p for p in data.history if p.wind_mwh is not None and p.solar_mwh is not None]
+        if len(sourced) >= 2:
+            lines += chart(
+                "Eólica e solar, mês a mês",
+                [_short_month(point.period) for point in sourced],
+                [
+                    ("Eólica", [(point.wind_mwh or 0) / 1000 for point in sourced]),
+                    ("Solar", [(point.solar_mwh or 0) / 1000 for point in sourced]),
+                ],
+                kind="stacked-bar",
+            )
 
     lines += ["", "## Onde os cortes se concentraram", ""]
     ranked = sorted(data.by_subsystem.items(), key=lambda item: item[1].curtailed_mwh, reverse=True)
@@ -287,6 +370,12 @@ def build_report(data: ReportData) -> Report:
         ],
         1,
     )
+    if ranked:
+        lines += chart(
+            f"Energia cortada por subsistema em {label}",
+            [SUBSYSTEM_NAMES.get(subsystem, subsystem) for subsystem, _ in ranked],
+            [("Energia cortada", [totals.curtailed_mwh / 1000 for _, totals in ranked])],
+        )
     lines += ["", f"### Os {len(data.states)} estados com mais energia cortada", ""]
     lines += _table(
         ["Estado", "Energia cortada", "% de corte"],
@@ -325,6 +414,16 @@ def build_report(data: ReportData) -> Report:
                 if mwh > 0
             ],
             1,
+        )
+        reasons = [
+            (REASON_NAMES[key], mwh / 1000)
+            for key, mwh in sorted(data.reasons_mwh.items(), key=lambda item: item[1], reverse=True)
+            if mwh > 0
+        ]
+        lines += chart(
+            f"Motivos do corte em {label}",
+            [name for name, _ in reasons],
+            [("Energia cortada", [value for _, value in reasons])],
         )
 
     lines += [

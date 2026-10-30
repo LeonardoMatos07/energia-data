@@ -29,7 +29,7 @@ flowchart LR
     ONS[("ONS<br/>public S3 bucket")]
     subgraph Airflow["Airflow 3 · ons_curtailment_pipeline"]
         E[extract] --> T[transform] --> V[validate] --> R[record]
-        R --> P[publish] --> N[notify_portal]
+        R --> P[publish] --> N[notify_portal] --> RP[publish_reports] --> A[announce_report]
     end
     subgraph Lake["Data lake (S3)"]
         B[(bronze)]
@@ -54,6 +54,8 @@ flowchart LR
 | `record` | source × month | Records the load | `load_run` |
 | `publish` | month | Builds the portal aggregates and loads Postgres idempotently (deletes and reinserts the month in one transaction) | `gold/`, `plant`, `*_monthly_curtailment` |
 | `notify_portal` | run | Asks `spillway-api` to revalidate the portal (Cognito machine token) | — |
+| `publish_reports` | run | Writes and publishes the monthly report of every processed month (with charts) through the API, then refreshes the portal's report pages | — |
+| `announce_report` | run | After the regular monthly run only: asks the API to e-mail the newest month's report to everyone who turned the newsletter on. Safe to repeat (the API sends once per month and finishes a partial send). Backfills and re-runs of old months never mail anyone. Switch off with `DISPATCH_REPORT_EMAIL=false` | — |
 
 The pipeline runs on the 3rd of every month and **reprocesses the last 3 months**
 (`REPROCESS_MONTHS`), because ONS revises data it has already published. Files with the same
@@ -73,6 +75,20 @@ up in the admin area.
 
 There is also the `ons_grid_pipeline` (load, generation per plant and capacity), which for now
 only feeds the lake; it is the groundwork for the next phases (BESS siting).
+
+### Example: Northeast exports and Northeast curtailment
+
+```sql
+SELECT i.month,
+       i.energy_mwh / 1000          AS ne_to_se_gwh,        -- positive: Northeast to Southeast
+       c.curtailed_mwh / 1000       AS ne_curtailed_gwh,
+       c.curtailment_pct
+FROM interchange_monthly i
+JOIN subsystem_monthly_curtailment c
+  ON c.month = i.month AND c.subsystem = 'NE' AND c.source = 'total'
+WHERE i.origin = 'NE' AND i.destination = 'SE'
+ORDER BY i.month;
+```
 
 ## Curtailment methodology
 

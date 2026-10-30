@@ -1,0 +1,57 @@
+{
+ "@id": "https://www.gov.br/aneel/pt-br/@search?portal_type=News+Item",
+ "items": [
+  {
+   "@id": "https://www.gov.br/aneel/pt-br/assuntos/noticias/2026/aneel-promove-encontro-com-analistas-de-investimentos",
+   "@type": "News Item",
+   "description": "Executivos de instituições financeiras debateram aspectos do setor elétrico",
+   "effective": "2026-10-29T21:28:12+00:00",
+   "end": null,
+   "getObjSize": "115.3 KB",
+   "getRemoteUrl": null,
+   "head_title": null,
+   "image_field": "image",
+   "mime_type": "text/plain",
+   "nav_title": null,
+   "review_state": "published",
+   "start": null,
+   "title": "ANEEL promove encontro com analistas de investimentos",
+   "type_title": "Notícia"
+  },
+  {
+   "@id": "https://www.gov.br/aneel/pt-br/assuntos/noticias/2026/aneel-lanca-relatorio-sobre-perspectivas-diante-do-el-nino-e-a-resiliencia-do-setor-eletrico",
+   "@type": "News Item",
+   "description": "Documento analisa os impactos dos fenômeno climáticos e as estratégias para enfrentamento",
+   "effective": "2026-10-29T20:47:53+00:00",
+   "end": null,
+   "getObjSize": "0 KB",
+   "getRemoteUrl": null,
+   "head_title": null,
+   "image_field": "",
+   "mime_type": "text/plain",
+   "nav_title": null,
+   "review_state": "published",
+   "start": null,
+   "title": "ANEEL lança Relatório sobre perspectivas diante do El Niño e a resiliência do setor elétrico",
+   "type_title": "Notícia"
+  },
+  {
+   "@id": "https://www.gov.br/aneel/pt-br/assuntos/noticias/2026/setor-eletrico-e-destaque-na-solucao-de-reclamacoes-e-na-satisfacao-dos-consumidores-no-consumidor-gov.br",
+   "@type": "News Item",
+   "description": "Em 2026, energia elétrica alcança 83,6% de reclamações resolvidas e nota de satisfação de 3,09, com desempenho de destaque entre setores regulados comparáveis",
+   "effective": "2026-10-29T14:08:58+00:00",
+   "end": null,
+   "getObjSize": "0 KB",
+   "getRemoteUrl": null,
+   "head_title": null,
+   "image_field": "",
+   "mime_type": "text/plain",
+   "nav_title": null,
+   "review_state": "published",
+   "start": null,
+   "title": "Setor elétrico é destaque na solução de reclamações e na satisfação dos consumidores no Consumidor.gov.br",
+   "type_title": "Notícia"
+  }
+ ],
+ "items_total": 2334
+}

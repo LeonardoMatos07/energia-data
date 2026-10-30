@@ -108,6 +108,49 @@ class Session:
         log.info("%s: upserted %d rows", table, df.height)
         return df.height
 
+    def apply_snapshot(
+        self, table: str, df: pl.DataFrame, *, key: str, snapshot_date: date
+    ) -> tuple[int, int]:
+        """Versioned history of a register: returns (versions closed, versions opened).
+
+        ``df`` is the whole new snapshot (``key``, ``valid_from``, ``row_hash`` and the attributes).
+        Items that changed or disappeared get ``valid_to`` = the snapshot date and changed or new
+        ones are inserted. A rerun of the same snapshot date first undoes that date, so the result
+        is the same however many times it runs."""
+        stage = self._stage(table, df)
+        match = sql.SQL("t.{0} = s.{0}").format(sql.Identifier(key))
+        # undo a previous run of the same snapshot date
+        self.execute(
+            sql.SQL("DELETE FROM {} WHERE valid_from = %s").format(_table(table)), (snapshot_date,)
+        )
+        self.execute(
+            sql.SQL("UPDATE {} SET valid_to = NULL WHERE valid_to = %s").format(_table(table)),
+            (snapshot_date,),
+        )
+        self.execute(
+            sql.SQL(
+                "UPDATE {table} t SET valid_to = %s WHERE t.valid_to IS NULL AND NOT EXISTS "
+                "(SELECT 1 FROM {stage} s WHERE {match} AND s.row_hash = t.row_hash)"
+            ).format(table=_table(table), stage=sql.Identifier(stage), match=match),
+            (snapshot_date,),
+        )
+        closed = self._cursor.rowcount
+        self.execute(
+            sql.SQL(
+                "INSERT INTO {table} ({columns}) SELECT {columns} FROM {stage} s WHERE NOT EXISTS "
+                "(SELECT 1 FROM {table} t WHERE t.valid_to IS NULL AND {match} "
+                "AND t.row_hash = s.row_hash)"
+            ).format(
+                table=_table(table),
+                columns=_columns(df.columns),
+                stage=sql.Identifier(stage),
+                match=match,
+            )
+        )
+        opened = self._cursor.rowcount
+        log.info("%s: %d versions closed, %d opened", table, closed, opened)
+        return closed, opened
+
     def _stage(self, table: str, df: pl.DataFrame) -> str:
         stage = f"stage_{next(self._stage_ids)}"
         self.execute(

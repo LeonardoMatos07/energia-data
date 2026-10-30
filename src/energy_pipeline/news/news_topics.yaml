@@ -1,0 +1,76 @@
+# Keywords per topic, matched at the start of a word, ignoring case and accents.
+# An item may have several topics; one that matches none gets "outros".
+topics:
+  curtailment:
+    - curtailment
+    - corte de geracao
+    - cortes de geracao
+    - restricao de geracao
+    - geracao nao realizada
+    - constrained-off
+  tarifas:
+    - tarifa
+    - reajuste
+    - revisao tarifaria
+    - bandeira tarifaria
+    - bandeira amarela
+    - bandeira vermelha
+    - conta de luz
+  leiloes:
+    - leilao
+    - leiloes
+    - lrcap
+    - certame
+  transmissao:
+    - transmissao
+    - linha de transmissao
+    - linhas de transmissao
+    - subestacao
+    - subestacoes
+    - rede basica
+  distribuicao:
+    - distribuicao
+    - distribuidora
+    - distribuidoras
+    - concessao de distribuicao
+  geracao-hidreletrica:
+    - hidreletrica
+    - hidreletricas
+    - hidroeletrica
+    - usina hidr
+    - reservatorio
+    - pequenas centrais hidreletricas
+  eolica-solar:
+    - eolica
+    - eolicas
+    - solar
+    - fotovoltaic
+    - offshore
+  geracao-distribuida:
+    - geracao distribuida
+    - minigeracao
+    - microgeracao
+    - net metering
+  mercado-livre:
+    - mercado livre
+    - ambiente de contratacao livre
+    - comercializador
+    - abertura do mercado
+  regulacao:
+    - resolucao normativa
+    - resolucao homologatoria
+    - consulta publica
+    - audiencia publica
+    - regulamenta
+    - portaria
+    - diretoria da aneel
+    - agenda regulatoria
+  seguranca-energetica:
+    - seguranca energetica
+    - escassez
+    - apagao
+    - racionamento
+    - crise hidrica
+    - nivel dos reservatorios
+    - suprimento
+    - confiabilidade

@@ -43,7 +43,10 @@ def build_pipeline_dag(
 ) -> Any:
     sources = PIPELINES[pipeline]
     lake_asset = Asset(f"s3://energy-lake/silver/{pipeline}")
-    portal_asset = Asset("postgres://warehouse-db:5432/warehouse/public/plant_monthly_curtailment")
+    portal_table = (
+        "plant_monthly_curtailment" if pipeline == "curtailment" else f"{pipeline}_tables"
+    )
+    portal_asset = Asset(f"postgres://warehouse-db:5432/warehouse/public/{portal_table}")
 
     @dag(
         dag_id=dag_id,
@@ -120,13 +123,27 @@ def build_pipeline_dag(
         def publish(period: str) -> dict[str, Any]:
             from energy_pipeline import steps
 
-            return steps.run_publish(Period.parse(period), _settings())
+            return steps.run_publish(Period.parse(period), _settings(), pipeline)
 
         @task(outlets=[portal_asset])
         def notify_portal() -> dict[str, Any]:
             from energy_pipeline import steps
 
             return steps.notify_portal(_settings())
+
+        @task(trigger_rule="none_failed")
+        def publish_reports(periods: list[str]) -> dict[str, Any]:
+            from energy_pipeline import steps
+
+            return steps.publish_reports(periods, _settings())
+
+        @task(trigger_rule="none_failed")
+        def announce_report(periods: list[str], **context: Any) -> dict[str, Any]:
+            from energy_pipeline import steps
+
+            run_date = context.get("logical_date") or datetime.now(UTC)
+            backfill = bool(context["params"].get("first_month"))
+            return steps.announce_report(periods, run_date, backfill, _settings())
 
         periods = resolve_periods()
         infrastructure = prepare_infrastructure()
@@ -148,6 +165,9 @@ def build_pipeline_dag(
             published = publish.expand(period=periods)
             for done in recorded:
                 done >> published
-            published >> notify_portal()
+            # Data first, then the report that tells the story, then the e-mail to subscribers.
+            notified = published >> notify_portal()
+            if pipeline == "curtailment":
+                notified >> publish_reports(periods) >> announce_report(periods)
 
     return pipeline_dag()
