@@ -164,6 +164,43 @@ def energy_balance_checks(
     ]
 
 
+MAX_INTERCHANGE_MW = 40_000
+MAX_THERMAL_PLANT_MW = 15_000
+
+
+def interchange_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    """Gates for the national and the international interchange (origin, destination, hour)."""
+    total = df.height + rejected_rows
+    pairs = df.select("origin", "destination").unique().height
+    return [
+        not_empty(df),
+        no_nulls(df, ["origin", "destination", "measured_at"]),
+        unique(df, ["origin", "destination", "measured_at"]),
+        within_period(df, "measured_at", period),
+        between(df, "flow_mw_avg", -MAX_INTERCHANGE_MW, MAX_INTERCHANGE_MW),
+        between(df, "scheduled_mw_avg", -MAX_INTERCHANGE_MW, MAX_INTERCHANGE_MW),
+        completeness(df, pairs * period.hours, minimum_ratio=0.9),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def thermal_dispatch_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["plant_code", "measured_at", "subsystem_id", "verified_total_mwh"]),
+        unique(df, ["plant_code", "measured_at"]),
+        within_period(df, "measured_at", period),
+        accepted_values(df, "subsystem_id", SUBSYSTEMS),
+        between(df, "verified_total_mwh", -GENERATION_NOISE_MW, MAX_THERMAL_PLANT_MW),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
 def plant_generation_checks(
     df: pl.DataFrame,
     period: Period,

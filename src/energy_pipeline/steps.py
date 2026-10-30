@@ -23,12 +23,15 @@ from energy_pipeline.period import Period
 from energy_pipeline.sources import (
     ENERGY_BALANCE,
     GENERATION_CAPACITY,
+    INTERNATIONAL_INTERCHANGE,
     LOAD_CURVE,
     MARGINAL_COST,
+    NATIONAL_INTERCHANGE,
     PLANT_GENERATION,
     SOLAR_CLUSTER_CURTAILMENT,
     SOLAR_PLANT_CURTAILMENT,
     SOURCES,
+    THERMAL_DISPATCH,
     WIND_CLUSTER_CURTAILMENT,
     WIND_PLANT_CURTAILMENT,
     FileFormat,
@@ -136,6 +139,12 @@ def _standardize(
             return transform.transform_load_curve(raw, period)
         case ENERGY_BALANCE.name:
             return transform.transform_energy_balance(raw, period)
+        case NATIONAL_INTERCHANGE.name:
+            return transform.transform_national_interchange(raw, period)
+        case INTERNATIONAL_INTERCHANGE.name:
+            return transform.transform_international_interchange(raw, period)
+        case THERMAL_DISPATCH.name:
+            return transform.transform_thermal_dispatch(raw, period)
         case PLANT_GENERATION.name:
             return transform.transform_plant_generation(raw, period)
         case GENERATION_CAPACITY.name:
@@ -223,6 +232,10 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
 
     if source_name == LOAD_CURVE.name:
         results = quality.load_curve_checks(df, period, rejected, max_rejected)
+    elif source_name in (NATIONAL_INTERCHANGE.name, INTERNATIONAL_INTERCHANGE.name):
+        results = quality.interchange_checks(df, period, rejected, max_rejected)
+    elif source_name == THERMAL_DISPATCH.name:
+        results = quality.thermal_dispatch_checks(df, period, rejected, max_rejected)
     elif source_name == ENERGY_BALANCE.name:
         results = quality.energy_balance_checks(df, period, rejected, max_rejected)
     elif source_name == PLANT_GENERATION.name:
@@ -298,18 +311,32 @@ def run_publish_system(period: Period, settings: Settings) -> Manifest:
     lake = _lake(settings)
     balance = _read_if_applicable(lake, ENERGY_BALANCE.name, period)
     plants = _read_if_applicable(lake, PLANT_GENERATION.name, period)
-    if balance is None and plants is None:
+    national = _read_if_applicable(lake, NATIONAL_INTERCHANGE.name, period)
+    international = _read_if_applicable(lake, INTERNATIONAL_INTERCHANGE.name, period)
+    thermal = _read_if_applicable(lake, THERMAL_DISPATCH.name, period)
+    if all(df is None for df in (balance, plants, national, international, thermal)):
         log.info("No system data for %s; nothing to publish", period)
         return {"period": str(period), "published": False}
     has_capacity = lake.metadata(CAPACITY_LATEST_KEY) is not None
     capacity = lake.read_parquet(CAPACITY_LATEST_KEY) if has_capacity else None
 
-    tables = system.build_system_tables(period, balance, plants, capacity)
+    tables = system.build_system_tables(
+        period,
+        balance,
+        plants,
+        capacity,
+        national=national,
+        international=international,
+        thermal=thermal,
+    )
     outputs = {
         "subsystem_hourly_balance": tables.hourly_balance,
         "subsystem_monthly_generation": tables.monthly_generation,
         "power_plant": tables.power_plant,
         "plant_monthly_generation": tables.plant_monthly,
+        "interchange_hourly": tables.interchange_hourly,
+        "interchange_monthly": tables.interchange_monthly,
+        "thermal_dispatch_monthly": tables.thermal_monthly,
     }
     built = {name: df for name, df in outputs.items() if df is not None}
     for name, df in built.items():
@@ -320,15 +347,15 @@ def run_publish_system(period: Period, settings: Settings) -> Manifest:
         session.lock("publish_system")
         if "power_plant" in built:
             session.upsert("power_plant", built["power_plant"], keys=["id"], keep=["slug"])
-        if "subsystem_hourly_balance" in built:
-            session.replace_range(
-                "subsystem_hourly_balance",
-                built["subsystem_hourly_balance"],
-                column="hour",
-                start=start,
-                end=end,
-            )
-        for name in ("subsystem_monthly_generation", "plant_monthly_generation"):
+        for name in ("subsystem_hourly_balance", "interchange_hourly"):
+            if name in built:
+                session.replace_range(name, built[name], column="hour", start=start, end=end)
+        for name in (
+            "subsystem_monthly_generation",
+            "plant_monthly_generation",
+            "interchange_monthly",
+            "thermal_dispatch_monthly",
+        ):
             if name in built:
                 session.replace_range(
                     name, built[name], column="month", start=start.date(), end=end.date()
