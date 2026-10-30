@@ -231,9 +231,11 @@ def reservoir_storage_checks(
         no_nulls(df, ["reservoir_name", "day"]),
         unique(df, ["reservoir_name", "day"]),
         within_days(df, "day", period),
-        # a reservoir can be above its nominal maximum while it spills (seen: 166%)
-        between(df, "storage_pct", 0, MAX_RESERVOIR_STORAGE_PCT),
-        between(df, "storage_mw_month", 0, MAX_ENERGY_MW),
+        # Below the minimum operating volume a reservoir's EAR is negative (2015: -83%) and while it
+        # spills it is above 100% (up to 379%): only absurd values (a unit change) are blocked.
+        between(df, "storage_pct", -MAX_RESERVOIR_STORAGE_PCT, 1000),
+        between(df, "storage_pct", 0, 200, Severity.WARN),
+        between(df, "storage_mw_month", -MAX_ENERGY_MW, MAX_ENERGY_MW),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 
