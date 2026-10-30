@@ -76,6 +76,20 @@ up in the admin area.
 There is also the `ons_grid_pipeline` (load, generation per plant and capacity), which for now
 only feeds the lake; it is the groundwork for the next phases (BESS siting).
 
+### Example: Northeast exports and Northeast curtailment
+
+```sql
+SELECT i.month,
+       i.energy_mwh / 1000          AS ne_to_se_gwh,        -- positive: Northeast to Southeast
+       c.curtailed_mwh / 1000       AS ne_curtailed_gwh,
+       c.curtailment_pct
+FROM interchange_monthly i
+JOIN subsystem_monthly_curtailment c
+  ON c.month = i.month AND c.subsystem = 'NE' AND c.source = 'total'
+WHERE i.origin = 'NE' AND i.destination = 'SE'
+ORDER BY i.month;
+```
+
 ## Curtailment methodology
 
 ONS publishes curtailment at two levels, and neither alone answers "how much did *this plant*

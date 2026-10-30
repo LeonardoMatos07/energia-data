@@ -15,6 +15,29 @@ from energy_pipeline.transform import (
 
 MAX_UNPARSEABLE_SHARE = 0.01
 
+# dispatch reason -> (programmed column, verified column) of the ONS thermal dispatch file.
+# Some reasons overlap (merit order contains its above-inflexibility part, and so on).
+THERMAL_REASON_COLUMNS: dict[str, tuple[str, str]] = {
+    "total": ("val_proggeracao", "val_verifgeracao"),
+    "merit_order": ("val_progordemmerito", "val_verifordemmerito"),
+    "merit_order_above_inflexibility": (
+        "val_progordemdemeritoacimadainflex",
+        "val_verifordemdemeritoacimadainflex",
+    ),
+    "inflexibility": ("val_proginflexibilidade", "val_verifinflexibilidade"),
+    "inflexibility_in_merit": ("val_proginflexembutmerito", "val_verifinflexembutmerito"),
+    "inflexibility_pure": ("val_proginflexpura", "val_verifinflexpura"),
+    "electrical_reason": ("val_prograzaoeletrica", "val_verifrazaoeletrica"),
+    "energy_security": ("val_proggarantiaenergetica", "val_verifgarantiaenergetica"),
+    "gfom": ("val_proggfom", "val_verifgfom"),
+    "loss_replacement": ("val_progreposicaoperdas", "val_verifreposicaoperdas"),
+    "export": ("val_progexportacao", "val_verifexportacao"),
+    "power_reserve": ("val_progreservapotencia", "val_verifreservapotencia"),
+    "gsub": ("val_proggsub", "val_verifgsub"),
+    "unit_commitment": ("val_progunitcommitment", "val_verifunitcommitment"),
+    "constrained_off": ("val_progconstrainedoff", "val_verifconstrainedoff"),
+}
+
 PARSERS: dict[str, Callable[[str], pl.Expr]] = {
     "float": parse_float,
     "int": parse_int,
@@ -92,6 +115,28 @@ SCHEMAS: dict[str, dict[str, str]] = {
         "val_gersolar": "float",
         "val_carga": "float",
         "val_intercambio": "float",
+    },
+    "national_interchange": {
+        "din_instante": "timestamp",
+        "id_subsistema_origem": "text",
+        "id_subsistema_destino": "text",
+        "val_intercambiomwmed": "float",
+        "val_intercambioprogmwmed": "float",
+    },
+    "international_interchange": {
+        "din_instante": "timestamp",
+        "nom_paisdestino": "text",
+        "val_intercambiomwmed": "float",
+        "val_intercambioprogmwmed": "float",
+    },
+    "thermal_dispatch": {
+        "din_instante": "timestamp",
+        "id_subsistema": "text",
+        "nom_usina": "text",
+        "cod_usinaplanejamento": "text",
+        "ceg": "text",
+        "nom_combustivel": "text",
+        **{column: "float" for pair in THERMAL_REASON_COLUMNS.values() for column in pair},
     },
     "generation_capacity": {
         "cod_equipamento": "text",

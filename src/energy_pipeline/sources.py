@@ -106,6 +106,38 @@ ENERGY_BALANCE = Source(
     available_from=Period(2000, 1),
 )
 
+NATIONAL_INTERCHANGE = Source(
+    name="national_interchange",
+    ons_dataset="intercambio_nacional_ho",
+    file_pattern="INTERCAMBIO_NACIONAL_{year}.parquet",
+    partitioning=Partitioning.YEAR,
+    description="Hourly power exchanged between subsystems, in average MW (origin to destination).",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2000, 1),
+)
+
+INTERNATIONAL_INTERCHANGE = Source(
+    name="international_interchange",
+    ons_dataset="intercambio_internacional_ho",
+    file_pattern="INTERCAMBIO_INTERNACIONAL_{year}.parquet",
+    partitioning=Partitioning.YEAR,
+    description="Hourly power exchanged with neighbouring countries, in average MW.",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2000, 1),
+)
+
+THERMAL_DISPATCH = Source(
+    name="thermal_dispatch",
+    ons_dataset="geracao_termica_despacho_2_ho",
+    file_pattern="GERACAO_TERMICA_DESPACHO-2_{year}_{month:02d}.parquet",
+    yearly_file_pattern="GERACAO_TERMICA_DESPACHO-2_{year}.parquet",
+    yearly_until=Period(2021, 12),
+    partitioning=Partitioning.MONTH,
+    description="Hourly programmed and verified thermal generation per plant and dispatch reason.",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2022, 1),
+)
+
 GENERATION_CAPACITY = Source(
     name="generation_capacity",
     ons_dataset="capacidade-geracao",
@@ -178,7 +210,15 @@ def _registry(*sources: Source) -> dict[str, Source]:
 
 
 GRID_SOURCES = _registry(LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
-SYSTEM_SOURCES = _registry(ENERGY_BALANCE, LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
+SYSTEM_SOURCES = _registry(
+    ENERGY_BALANCE,
+    LOAD_CURVE,
+    PLANT_GENERATION,
+    GENERATION_CAPACITY,
+    NATIONAL_INTERCHANGE,
+    INTERNATIONAL_INTERCHANGE,
+    THERMAL_DISPATCH,
+)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
     GENERATION_CAPACITY,

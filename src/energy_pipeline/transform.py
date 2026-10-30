@@ -164,6 +164,81 @@ def transform_energy_balance(raw: pl.DataFrame, period: Period) -> TransformResu
     return TransformResult(valid.sort("subsystem_id", "measured_at"), rejected, duplicates)
 
 
+def transform_national_interchange(raw: pl.DataFrame, period: Period) -> TransformResult:
+    """The ONS lists each link in the direction of the flow of that hour, with a magnitude. The
+    silver layer gives every link one fixed direction (alphabetical: N to NE, NE to SE, ...) and a
+    signed flow: positive means origin to destination, negative the opposite."""
+    origin = parse_code("id_subsistema_origem")
+    destination = parse_code("id_subsistema_destino")
+    forward = origin < destination
+    sign = pl.when(forward).then(1.0).otherwise(-1.0)
+    df = raw.select(
+        parse_timestamp("din_instante").alias("measured_at"),
+        pl.when(forward).then(origin).otherwise(destination).alias("origin"),
+        pl.when(forward).then(destination).otherwise(origin).alias("destination"),
+        (parse_float("val_intercambiomwmed") * sign).alias("flow_mw_avg"),
+        (parse_float("val_intercambioprogmwmed") * sign).alias("scheduled_mw_avg"),
+    ).filter(in_period_or_unparsed("measured_at", period))
+
+    valid, rejected = split_rejected(df, ["measured_at", "origin", "destination"])
+    valid, duplicates = deduplicate(valid, ["origin", "destination", "measured_at"])
+    return TransformResult(valid.sort("origin", "destination", "measured_at"), rejected, duplicates)
+
+
+def transform_international_interchange(raw: pl.DataFrame, period: Period) -> TransformResult:
+    df = raw.select(
+        parse_timestamp("din_instante").alias("measured_at"),
+        clean_text("nom_paisdestino").alias("country"),
+        parse_float("val_intercambiomwmed").alias("flow_mw_avg"),
+        parse_float("val_intercambioprogmwmed").alias("scheduled_mw_avg"),
+    ).filter(in_period_or_unparsed("measured_at", period))
+    df = normalize_labels(df, ["country"]).rename({"country": "destination"})
+    df = df.with_columns(pl.lit("BR").alias("origin"))
+
+    valid, rejected = split_rejected(df, ["measured_at", "destination"])
+    valid, duplicates = deduplicate(valid, ["origin", "destination", "measured_at"])
+    columns = ["measured_at", "origin", "destination", "flow_mw_avg", "scheduled_mw_avg"]
+    return TransformResult(
+        valid.select(columns).sort("destination", "measured_at"),
+        rejected.select(columns),
+        duplicates,
+    )
+
+
+def transform_thermal_dispatch(raw: pl.DataFrame, period: Period) -> TransformResult:
+    from energy_pipeline.schema import THERMAL_REASON_COLUMNS
+
+    reasons = [
+        parse_float(column).alias(f"{kind}_{reason}_mwh")
+        for reason, columns in THERMAL_REASON_COLUMNS.items()
+        for kind, column in zip(("programmed", "verified"), columns, strict=True)
+    ]
+    df = raw.select(
+        parse_timestamp("din_instante").alias("measured_at"),
+        parse_code("id_subsistema").alias("subsystem_id"),
+        clean_text("nom_usina").alias("plant_name"),
+        parse_code("cod_usinaplanejamento").alias("plant_code"),
+        parse_code("ceg").alias("ceg"),
+        clean_text("nom_combustivel").alias("fuel_type"),
+        *reasons,
+    ).filter(in_period_or_unparsed("measured_at", period))
+    df = normalize_labels(df, ["fuel_type"])
+    # new plants may not have a planning code yet: fall back to the CEG, then to the name
+    df = df.with_columns(
+        pl.coalesce(
+            pl.col("plant_code"),
+            pl.lit("CEG:") + pl.col("ceg"),
+            pl.lit("NAME:") + pl.col("plant_name").str.to_uppercase(),
+        ).alias("plant_code")
+    )
+
+    valid, rejected = split_rejected(
+        df, ["measured_at", "subsystem_id", "plant_name", "plant_code", "verified_total_mwh"]
+    )
+    valid, duplicates = deduplicate(valid, ["plant_code", "measured_at"])
+    return TransformResult(valid.sort("plant_code", "measured_at"), rejected, duplicates)
+
+
 def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformResult:
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),
