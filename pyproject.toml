@@ -4,23 +4,23 @@ version = "0.1.0"
 description = "Data pipelines of the platform: ONS ingestion, data lake and aggregate loading"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["polars==1.20.0", "pyyaml==6.0.3", "selectolax==0.3.29"]
+dependencies = ["polars==2.0.0", "pyyaml==6.0.3", "selectolax==1.0.0"]
 
 [project.optional-dependencies]
 local = [
-    "boto3==1.36.0",
-    "psycopg2-binary==2.9.10",
+    "boto3==1.43.114",
+    "psycopg2-binary==2.9.13",
     "requests==2.34.2",
 ]
 
 [dependency-groups]
 dev = [
-    "mypy==1.14.1",
-    "pytest==8.3.4",
-    "ruff==0.9.6",
-    "types-psycopg2==2.9.21.20241019",
-    "types-pyyaml==6.0.12.20250915",
-    "types-requests==2.33.0.20260906",
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "ruff==0.17.1",
+    "types-psycopg2==2.9.21.20261008",
+    "types-pyyaml==6.0.12.20260906",
+    "types-requests==2.33.0.20261006",
 ]
 
 [tool.uv]
