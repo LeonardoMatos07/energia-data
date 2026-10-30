@@ -164,6 +164,140 @@ def energy_balance_checks(
     ]
 
 
+def within_days(df: pl.DataFrame, column: str, period: Period) -> CheckResult:
+    outside = df.filter(
+        (pl.col(column) < period.start.date()) | (pl.col(column) >= period.end.date())
+    ).height
+    return CheckResult(f"within_period[{column}, {period}]", outside == 0, f"{outside} rows")
+
+
+def every_day_has_all(df: pl.DataFrame, key: str, expected: set[str]) -> CheckResult:
+    """Each day that appears in the file must have every subsystem."""
+    counts = df.group_by("day").agg(pl.col(key).n_unique().alias("n"))
+    incomplete = counts.filter(pl.col("n") < len(expected)).height
+    return CheckResult(
+        f"every_day_has_all[{key}]", incomplete == 0, f"{incomplete} days incomplete"
+    )
+
+
+MAX_STORAGE_PCT = 100.0
+MAX_RESERVOIR_STORAGE_PCT = 200.0
+MAX_ENERGY_MW = 500_000
+MAX_FLOW_M3S = 100_000
+MAX_SPILLED_ENERGY_MWH = 100_000
+
+
+def subsystem_storage_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["subsystem_id", "day"]),
+        unique(df, ["subsystem_id", "day"]),
+        within_days(df, "day", period),
+        accepted_values(df, "subsystem_id", SUBSYSTEMS),
+        every_day_has_all(df, "subsystem_id", SUBSYSTEMS),
+        between(df, "storage_pct", 0, MAX_STORAGE_PCT),
+        between(df, "storage_mw_month", 0, MAX_ENERGY_MW),
+        between(df, "storage_max_mw_month", 0, MAX_ENERGY_MW),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def subsystem_inflow_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["subsystem_id", "day"]),
+        unique(df, ["subsystem_id", "day"]),
+        within_days(df, "day", period),
+        accepted_values(df, "subsystem_id", SUBSYSTEMS),
+        every_day_has_all(df, "subsystem_id", SUBSYSTEMS),
+        between(df, "ena_gross_mw_avg", 0, MAX_ENERGY_MW),
+        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def reservoir_storage_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["reservoir_name", "day"]),
+        unique(df, ["reservoir_name", "day"]),
+        within_days(df, "day", period),
+        # a reservoir can be above its nominal maximum while it spills (seen: 166%)
+        between(df, "storage_pct", 0, MAX_RESERVOIR_STORAGE_PCT),
+        between(df, "storage_mw_month", 0, MAX_ENERGY_MW),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def reservoir_inflow_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["reservoir_name", "day"]),
+        unique(df, ["reservoir_name", "day"]),
+        within_days(df, "day", period),
+        between(df, "ena_gross_mw_avg", 0, MAX_ENERGY_MW),
+        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def hydro_operations_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["reservoir_id", "day"]),
+        unique(df, ["reservoir_id", "day"]),
+        within_days(df, "day", period),
+        *[
+            between(df, column, 0, MAX_FLOW_M3S)
+            for column in ("inflow_m3s", "outflow_m3s", "turbined_m3s", "spilled_m3s")
+        ],
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def reservoirs_checks(
+    df: pl.DataFrame, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["reservoir_id", "name"]),
+        unique(df, ["reservoir_id"]),
+        accepted_values(df, "subsystem_id", SUBSYSTEMS, Severity.WARN),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def spilled_energy_checks(
+    df: pl.DataFrame, period: Period, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["plant_code", "measured_at"]),
+        unique(df, ["plant_code", "measured_at"]),
+        within_period(df, "measured_at", period),
+        between(df, "spilled_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
+        between(df, "spilled_turbinable_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
 MAX_INTERCHANGE_MW = 40_000
 MAX_THERMAL_PLANT_MW = 15_000
 
