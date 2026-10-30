@@ -185,6 +185,7 @@ MAX_RESERVOIR_STORAGE_PCT = 200.0
 MAX_ENERGY_MW = 500_000
 ENA_NOISE_MW = 50.0
 MAX_FLOW_M3S = 100_000
+MAX_FLOW_NOISE_M3S = 1_000
 MAX_SPILLED_ENERGY_MWH = 100_000
 
 
@@ -266,8 +267,14 @@ def hydro_operations_checks(
         no_nulls(df, ["reservoir_id", "day"]),
         unique(df, ["reservoir_id", "day"]),
         within_days(df, "day", period),
+        # a flow is estimated from levels and can come out slightly negative: warn, and only
+        # block absurd values
         *[
-            between(df, column, 0, MAX_FLOW_M3S)
+            between(df, column, -MAX_FLOW_NOISE_M3S, MAX_FLOW_M3S)
+            for column in ("inflow_m3s", "outflow_m3s", "turbined_m3s", "spilled_m3s")
+        ],
+        *[
+            between(df, column, 0, MAX_FLOW_M3S, Severity.WARN)
             for column in ("inflow_m3s", "outflow_m3s", "turbined_m3s", "spilled_m3s")
         ],
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
@@ -296,8 +303,27 @@ def spilled_energy_checks(
         no_nulls(df, ["plant_code", "measured_at"]),
         unique(df, ["plant_code", "measured_at"]),
         within_period(df, "measured_at", period),
-        between(df, "spilled_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
-        between(df, "spilled_turbinable_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH),
+        # historical files have odd hours: block only absurd values, warn on the rest
+        between(
+            df, "spilled_energy_mwh", -10 * MAX_SPILLED_ENERGY_MWH, 10 * MAX_SPILLED_ENERGY_MWH
+        ),
+        between(
+            df, "spilled_energy_mwh", -GENERATION_NOISE_MW, MAX_SPILLED_ENERGY_MWH, Severity.WARN
+        ),
+        # historical files have odd hours: block only absurd values, warn on the rest
+        between(
+            df,
+            "spilled_turbinable_energy_mwh",
+            -10 * MAX_SPILLED_ENERGY_MWH,
+            10 * MAX_SPILLED_ENERGY_MWH,
+        ),
+        between(
+            df,
+            "spilled_turbinable_energy_mwh",
+            -GENERATION_NOISE_MW,
+            MAX_SPILLED_ENERGY_MWH,
+            Severity.WARN,
+        ),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 
