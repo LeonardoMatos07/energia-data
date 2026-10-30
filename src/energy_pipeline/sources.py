@@ -31,12 +31,31 @@ class Source:
     available_from: Period | None = None
     depends_on: tuple[str, ...] = ()
     source_type: str | None = None
+    # Some datasets are published as one file per year up to a point and per month afterwards.
+    yearly_until: Period | None = None
+    yearly_file_pattern: str | None = None
 
-    def file_name(self, period: Period) -> str:
-        return self.file_pattern.format(year=period.year, month=period.month)
+    def is_yearly(self, period: Period) -> bool:
+        return (
+            self.yearly_until is not None
+            and self.yearly_file_pattern is not None
+            and period <= self.yearly_until
+        )
 
-    def url(self, base_url: str, period: Period) -> str:
-        return f"{base_url.rstrip('/')}/{self.ons_dataset}/{self.file_name(period)}"
+    def formats(self) -> tuple[FileFormat, ...]:
+        """The configured format first, then the other one the ONS may publish instead."""
+        other = FileFormat.CSV if self.file_format is FileFormat.PARQUET else FileFormat.PARQUET
+        return (self.file_format, other)
+
+    def file_name(self, period: Period, file_format: FileFormat | None = None) -> str:
+        pattern = self.yearly_file_pattern if self.is_yearly(period) else self.file_pattern
+        name = (pattern or self.file_pattern).format(year=period.year, month=period.month)
+        if file_format is None or file_format is self.file_format:
+            return name
+        return f"{name.rsplit('.', 1)[0]}.{file_format}"
+
+    def url(self, base_url: str, period: Period, file_format: FileFormat | None = None) -> str:
+        return f"{base_url.rstrip('/')}/{self.ons_dataset}/{self.file_name(period, file_format)}"
 
     def partition(self, period: Period, snapshot_date: date) -> str:
         if self.partitioning is Partitioning.SNAPSHOT:
@@ -70,6 +89,8 @@ PLANT_GENERATION = Source(
     name="plant_generation",
     ons_dataset="geracao_usina_2_ho",
     file_pattern="GERACAO_USINA-2_{year}_{month:02d}.csv",
+    yearly_file_pattern="GERACAO_USINA-2_{year}.csv",
+    yearly_until=Period(2021, 12),
     partitioning=Partitioning.MONTH,
     description="Hourly generation per power plant, in average MW (= MWh per hour).",
     available_from=Period(2022, 1),

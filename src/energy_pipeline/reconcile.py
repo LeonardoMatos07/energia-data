@@ -50,13 +50,16 @@ class Deviation:
 
 def official_curtailment_mwh(source: Source, period: Period, lake: Lake) -> float | None:
     prefix = f"bronze/ons/{source.name}/"
-    key = lake.latest_key(prefix, source.file_name(period))
-    if key is None:
+    for file_format in source.formats():
+        key = lake.latest_key(prefix, source.file_name(period, file_format))
+        if key is not None:
+            break
+    else:
         return None
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / source.file_name(period)
+        path = Path(tmp) / source.file_name(period, file_format)
         lake.download_file(key, path)
-        raw = transform.read_raw(path, source.file_format)
+        raw = transform.read_raw(path, file_format)
     gnra = raw.select(transform.parse_float("val_geracaonaorealizadaapurada").alias("gnra"))
     return float(gnra["gnra"].fill_null(0).clip(lower_bound=0).sum()) * HALF_HOUR
 

@@ -10,6 +10,7 @@ from energy_pipeline.sources import (
     PIPELINES,
     PLANT_GENERATION,
     SOLAR_PLANT_CURTAILMENT,
+    FileFormat,
 )
 
 
@@ -76,3 +77,71 @@ def test_dependencies_are_declared_before_dependents():
         names = list(pipeline)
         for position, source in enumerate(pipeline.values()):
             assert all(names.index(dep) < position for dep in source.depends_on), source.name
+
+
+def test_plant_generation_is_yearly_until_2021_and_monthly_after():
+    old = PLANT_GENERATION.url(DEFAULT_ONS_BASE_URL, Period(2021, 12))
+    new = PLANT_GENERATION.url(DEFAULT_ONS_BASE_URL, Period(2022, 1))
+
+    assert old.endswith("/geracao_usina_2_ho/GERACAO_USINA-2_2021.csv")
+    assert new.endswith("/geracao_usina_2_ho/GERACAO_USINA-2_2022_01.csv")
+    assert PLANT_GENERATION.is_yearly(Period(2000, 6))
+    assert not PLANT_GENERATION.is_yearly(Period(2022, 1))
+
+
+def test_sources_without_yearly_pattern_stay_monthly():
+    assert not SOLAR_PLANT_CURTAILMENT.is_yearly(Period(2020, 1))
+    assert SOLAR_PLANT_CURTAILMENT.file_name(Period(2025, 2)).endswith("2025_02.parquet")
+
+
+def test_file_name_in_the_other_format_swaps_only_the_extension():
+    period = Period(2025, 2)
+
+    assert SOLAR_PLANT_CURTAILMENT.formats() == (FileFormat.PARQUET, FileFormat.CSV)
+    assert PLANT_GENERATION.formats() == (FileFormat.CSV, FileFormat.PARQUET)
+    assert SOLAR_PLANT_CURTAILMENT.file_name(period, FileFormat.CSV).endswith("2025_02.csv")
+    assert PLANT_GENERATION.url(DEFAULT_ONS_BASE_URL, Period(2021, 5), FileFormat.PARQUET).endswith(
+        "/GERACAO_USINA-2_2021.parquet"
+    )
+
+
+def test_locate_remote_file_falls_back_to_the_other_format(monkeypatch):
+    from types import SimpleNamespace
+
+    from energy_pipeline import extract, steps
+
+    asked = []
+
+    def fake_etag(url, timeout):
+        asked.append(url)
+        if url.endswith(".parquet"):
+            raise extract.SourceNotPublishedError(f"{url} returned HTTP 404")
+        return "abc"
+
+    monkeypatch.setattr(extract, "remote_etag", fake_etag)
+    file_format, url, etag = steps._locate_remote_file(
+        SOLAR_PLANT_CURTAILMENT,
+        Period(2025, 2),
+        SimpleNamespace(ons_base_url=DEFAULT_ONS_BASE_URL, http_timeout_seconds=5),
+    )
+
+    assert file_format is FileFormat.CSV
+    assert url.endswith("2025_02.csv") and etag == "abc"
+    assert asked[0].endswith(".parquet")
+
+
+def test_locate_remote_file_raises_when_no_format_exists(monkeypatch):
+    from types import SimpleNamespace
+
+    from energy_pipeline import extract, steps
+
+    def missing(url, timeout):
+        raise extract.SourceNotPublishedError(f"{url} returned HTTP 404")
+
+    monkeypatch.setattr(extract, "remote_etag", missing)
+    with pytest.raises(extract.SourceNotPublishedError):
+        steps._locate_remote_file(
+            PLANT_GENERATION,
+            Period(2030, 1),
+            SimpleNamespace(ons_base_url=DEFAULT_ONS_BASE_URL, http_timeout_seconds=5),
+        )
