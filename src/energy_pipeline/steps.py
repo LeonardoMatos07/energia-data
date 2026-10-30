@@ -21,6 +21,7 @@ from energy_pipeline.sources import (
     SOURCES,
     WIND_CLUSTER_CURTAILMENT,
     WIND_PLANT_CURTAILMENT,
+    FileFormat,
     Source,
 )
 from energy_pipeline.storage import Lake
@@ -60,6 +61,25 @@ def prepare_infrastructure(settings: Settings) -> None:
     Warehouse(settings.warehouse_dsn).check_schema()
 
 
+def _locate_remote_file(
+    source: Source, period: Period, settings: Settings
+) -> tuple[FileFormat, str, str | None]:
+    """Find the published file: the configured format first, the other one if it is missing."""
+    missing: extract.SourceNotPublishedError | None = None
+    for file_format in source.formats():
+        url = source.url(settings.ons_base_url, period, file_format)
+        try:
+            etag = extract.remote_etag(url, settings.http_timeout_seconds)
+        except extract.SourceNotPublishedError as error:
+            missing = missing or error
+            continue
+        if missing is not None:
+            log.warning("%s is not published; using the %s file instead", missing, file_format)
+        return file_format, url, etag
+    assert missing is not None
+    raise missing
+
+
 def run_extract(
     source_name: str, period: Period, settings: Settings, snapshot_date: date | None = None
 ) -> Manifest:
@@ -67,18 +87,15 @@ def run_extract(
     source = SOURCES[source_name]
     snapshot_date = snapshot_date or started_at.date()
     lake = _lake(settings)
-    url = source.url(settings.ons_base_url, period)
-    bronze_key = (
-        f"bronze/ons/{source.name}/{source.partition(period, snapshot_date)}/"
-        f"{source.file_name(period)}"
-    )
+    file_format, url, etag = _locate_remote_file(source, period, settings)
+    file_name = source.file_name(period, file_format)
+    bronze_key = f"bronze/ons/{source.name}/{source.partition(period, snapshot_date)}/{file_name}"
 
-    etag = extract.remote_etag(url, settings.http_timeout_seconds)
     stored = lake.metadata(bronze_key)
     changed = not (etag and stored and stored.get("source-etag") == etag)
     if changed:
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / source.file_name(period)
+            path = Path(tmp) / file_name
             checksum = extract.download(url, path, settings.http_timeout_seconds)
             metadata = {"source-url": url, "sha256": checksum, "source-etag": etag or ""}
             lake.upload_file(path, bronze_key, metadata=metadata)
@@ -92,6 +109,7 @@ def run_extract(
         "snapshot_date": snapshot_date.isoformat(),
         "partition": source.processed_partition(period, snapshot_date),
         "source_url": url,
+        "file_format": str(file_format),
         "source_changed": changed,
         "sha256": checksum,
         "bronze_key": bronze_key,
@@ -151,9 +169,10 @@ def run_transform(manifest: Manifest, settings: Settings) -> Manifest:
     snapshot_date = date.fromisoformat(manifest["snapshot_date"])
 
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / f"raw.{source.file_format}"
+        file_format = manifest.get("file_format", source.file_format)
+        path = Path(tmp) / f"raw.{file_format}"
         lake.download_file(manifest["bronze_key"], path)
-        raw = transform.read_raw(path, source.file_format)
+        raw = transform.read_raw(path, file_format)
 
     schema.check_schema(source.name, raw)
     result = _standardize(source, raw, period, snapshot_date)
