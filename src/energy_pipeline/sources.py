@@ -153,9 +153,13 @@ def _daily(
     )
 
 
-# The ONS keeps the daily hydrology since 2000 (EAR, ENA) and 1970 (hydrological data); the first
-# backfill starts in 2015, the rest is a separate run (move available_from back to load it).
-HYDRO_START = Period(2015, 1)
+# The ONS keeps the daily hydrology since 2000 (EAR, ENA) and 1970 (hydrological data). The history
+# starts in 2000-01: it covers the 2001, 2014-2015 and 2021 droughts and gives the inflow forecast a
+# year of warm-up before the first IMERG rain day (2001). Earlier years are not loaded. Run the
+# backfill with `--from 2000-01` (about +0.84 million rows in reservoir_daily, +175 MB).
+HYDRO_START = Period(2000, 1)
+# The spilled-energy file was only checked from 2015 on, so it keeps its own start.
+SPILLED_START = Period(2015, 1)
 
 RESERVOIRS = Source(
     name="reservoirs",
@@ -209,7 +213,7 @@ SPILLED_TURBINABLE_ENERGY = Source(
     partitioning=Partitioning.MONTH,
     description="Hourly energy spilled by hydro plants that could have been turbined.",
     file_format=FileFormat.PARQUET,
-    available_from=HYDRO_START,
+    available_from=SPILLED_START,
 )
 
 TRANSMISSION_LINES = Source(
