@@ -82,6 +82,26 @@ def test_reservoir_storage_may_exceed_100_while_spilling():
     assert all(r.passed for r in quality.reservoir_storage_checks(df, SEPTEMBER, 0, 0.01))
 
 
+def test_reservoir_storage_below_the_minimum_volume_is_negative_but_not_blocking():
+    df = pl.DataFrame(
+        {
+            "reservoir_name": ["I. SOLTEIRA", "I. SOLTEIRA", "C. NOVOS"],
+            "day": [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 1)],
+            "storage_mw_month": [-2037.0, -2000.0, 707.0],
+            "storage_pct": [-56.8, -55.0, 287.8],
+        }
+    )
+
+    results = quality.reservoir_storage_checks(df, SEPTEMBER, 0, 0.01)
+
+    blocking = [r for r in results if not r.passed and r.severity is quality.Severity.ERROR]
+    assert blocking == []
+    assert any(not r.passed and r.severity is quality.Severity.WARN for r in results)
+
+    absurd = df.with_columns(pl.lit(5000.0).alias("storage_pct"))
+    assert any(not r.passed for r in quality.reservoir_storage_checks(absurd, SEPTEMBER, 0, 0.01))
+
+
 def test_reservoir_storage_without_planning_code_is_kept():
     raw = raw_frame(
         "cod_resplanejamento;nom_reservatorio;id_subsistema;ear_data;ear_total_mwmes;"
