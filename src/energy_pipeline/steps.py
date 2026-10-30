@@ -11,6 +11,7 @@ import polars as pl
 from energy_pipeline import (
     curtailment,
     extract,
+    grid_assets,
     hydrology,
     notify,
     publish,
@@ -24,6 +25,7 @@ from energy_pipeline.period import Period
 from energy_pipeline.sources import (
     ENERGY_BALANCE,
     GENERATION_CAPACITY,
+    GRID_ASSET_SOURCES,
     HYDRO_OPERATIONS,
     INTERNATIONAL_INTERCHANGE,
     LOAD_CURVE,
@@ -37,9 +39,12 @@ from energy_pipeline.sources import (
     SOLAR_PLANT_CURTAILMENT,
     SOURCES,
     SPILLED_TURBINABLE_ENERGY,
+    SUBSTATIONS,
     SUBSYSTEM_INFLOW,
     SUBSYSTEM_STORAGE,
     THERMAL_DISPATCH,
+    TRANSFORMATION_CAPACITY,
+    TRANSMISSION_LINES,
     WIND_CLUSTER_CURTAILMENT,
     WIND_PLANT_CURTAILMENT,
     FileFormat,
@@ -59,6 +64,12 @@ CLUSTER_OF_PLANT_SOURCE = {
 }
 CAPACITY_LATEST_KEY = f"silver/{GENERATION_CAPACITY.name}/latest/data.parquet"
 RESERVOIRS_LATEST_KEY = "silver/reservoirs/latest/data.parquet"
+
+
+def latest_key(name: str) -> str:
+    return f"silver/{name}/latest/data.parquet"
+
+
 LOCAL_TIMEZONE = "America/Sao_Paulo"
 
 
@@ -162,6 +173,12 @@ def _standardize(
             return transform.transform_hydro_operations(raw, period)
         case SPILLED_TURBINABLE_ENERGY.name:
             return transform.transform_spilled_turbinable_energy(raw, period)
+        case TRANSMISSION_LINES.name:
+            return transform.transform_transmission_lines(raw, snapshot_date)
+        case SUBSTATIONS.name:
+            return transform.transform_substations(raw, snapshot_date)
+        case TRANSFORMATION_CAPACITY.name:
+            return transform.transform_transformation_capacity(raw, snapshot_date)
         case NATIONAL_INTERCHANGE.name:
             return transform.transform_national_interchange(raw, period)
         case INTERNATIONAL_INTERCHANGE.name:
@@ -227,6 +244,8 @@ def run_transform(manifest: Manifest, settings: Settings) -> Manifest:
         lake.write_parquet(silver, CAPACITY_LATEST_KEY)
     if source.name == RESERVOIRS.name:
         lake.write_parquet(silver, RESERVOIRS_LATEST_KEY)
+    if source.name in GRID_ASSET_SOURCES:
+        lake.write_parquet(silver, latest_key(source.name))
 
     quarantine_key = None
     if result.rejected.height:
@@ -273,6 +292,12 @@ def run_validate(manifest: Manifest, settings: Settings) -> Manifest:
         results = quality.hydro_operations_checks(df, period, rejected, max_rejected)
     elif source_name == SPILLED_TURBINABLE_ENERGY.name:
         results = quality.spilled_energy_checks(df, period, rejected, max_rejected)
+    elif source_name == TRANSMISSION_LINES.name:
+        results = quality.transmission_lines_checks(df, rejected, max_rejected)
+    elif source_name == SUBSTATIONS.name:
+        results = quality.substations_checks(df, rejected, max_rejected)
+    elif source_name == TRANSFORMATION_CAPACITY.name:
+        results = quality.transformation_capacity_checks(df, rejected, max_rejected)
     elif source_name == THERMAL_DISPATCH.name:
         results = quality.thermal_dispatch_checks(df, period, rejected, max_rejected)
     elif source_name == ENERGY_BALANCE.name:
@@ -482,7 +507,68 @@ def run_publish_hydrology(period: Period, settings: Settings) -> Manifest:
     return {"period": str(period), "published": True, "rows": rows, "warnings": tables.warnings}
 
 
+def run_publish_grid_assets(period: Period, settings: Settings) -> Manifest:
+    """Publishes the latest register snapshot as versioned history (idempotent per date)."""
+    started_at = _now()
+    lake = _lake(settings)
+
+    def latest(source: Source) -> pl.DataFrame | None:
+        key = latest_key(source.name)
+        return lake.read_parquet(key) if lake.metadata(key) is not None else None
+
+    inputs = {
+        "lines": latest(TRANSMISSION_LINES),
+        "substations": latest(SUBSTATIONS),
+        "transformers": latest(TRANSFORMATION_CAPACITY),
+    }
+    snapshots = {df["snapshot_date"][0] for df in inputs.values() if df is not None and df.height}
+    if not snapshots:
+        log.info("No grid register snapshot; nothing to publish")
+        return {"period": str(period), "published": False}
+    snapshot_date = max(snapshots)
+
+    tables = grid_assets.build_grid_asset_tables(snapshot_date, **inputs)
+    outputs = {
+        "transmission_line": (tables.transmission_line, "equipment_code"),
+        "substation": (tables.substation, "station_id"),
+        "transformer_capacity": (tables.transformer_capacity, "equipment_code"),
+    }
+    changes: dict[str, tuple[int, int]] = {}
+    with Warehouse(settings.warehouse_dsn).session() as session:
+        session.lock("publish_grid_assets")
+        for name, (df, key) in outputs.items():
+            if df is not None:
+                changes[name] = session.apply_snapshot(
+                    name, df, key=key, snapshot_date=snapshot_date
+                )
+    for name, (df, _) in outputs.items():
+        if df is not None:
+            lake.write_parquet(
+                df, f"gold/{name}/snapshot_date={snapshot_date.isoformat()}/data.parquet"
+            )
+
+    detail = ", ".join(
+        f"{name}: {len(df)} rows, {changes[name][0]} closed, {changes[name][1]} opened"
+        for name, (df, _) in outputs.items()
+        if df is not None
+    )
+    if tables.warnings:
+        detail += "\n" + "\n".join(tables.warnings)
+    Warehouse(settings.warehouse_dsn).record_load(
+        dataset="grid_assets_aggregates",
+        status="success",
+        started_at=started_at,
+        finished_at=_now(),
+        period=period.start.date(),
+        rows=sum(len(df) for df, _ in outputs.values() if df is not None),
+        detail=detail,
+    )
+    return {"period": str(period), "published": True, "changes": changes}
+
+
 def run_publish(period: Period, settings: Settings, pipeline: str = "curtailment") -> Manifest:
+    if pipeline == "grid_assets":
+        return run_publish_grid_assets(period, settings)
     if pipeline == "hydrology":
         return run_publish_hydrology(period, settings)
     if pipeline == "system":

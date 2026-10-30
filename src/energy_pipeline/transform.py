@@ -385,6 +385,81 @@ def transform_spilled_turbinable_energy(raw: pl.DataFrame, period: Period) -> Tr
     return TransformResult(valid.sort("plant_code", "measured_at"), rejected, duplicates)
 
 
+def transform_transmission_lines(raw: pl.DataFrame, snapshot_date: date) -> TransformResult:
+    df = raw.select(
+        parse_code("cod_equipamento").alias("equipment_code"),
+        clean_text("nom_linhadetransmissao").alias("name"),
+        parse_float("val_niveltensao_kv").alias("voltage_kv"),
+        clean_text("nom_tipolinha").alias("line_type"),
+        clean_text("nom_tipoderede").alias("network_type"),
+        clean_text("nom_agenteproprietario").alias("owner_agent"),
+        clean_text("nom_subestacao_de").alias("from_substation"),
+        clean_text("nom_subestacao_para").alias("to_substation"),
+        parse_code("id_subsistema_terminalde").alias("from_subsystem"),
+        parse_code("id_subsistema_terminalpara").alias("to_subsystem"),
+        parse_code("id_estado_terminalde").alias("from_state"),
+        parse_code("id_estado_terminalpara").alias("to_state"),
+        parse_float("val_comprimento").alias("length_km"),
+        parse_float("val_resistencia").alias("positive_seq_resistance"),
+        parse_float("val_reatancia").alias("positive_seq_reactance"),
+        parse_float("val_shunt").alias("positive_seq_shunt"),
+        parse_float("val_capacoperlongasemlimit").alias("capacity_long_no_limit_a"),
+        parse_float("val_capacoperlongacomlimit").alias("capacity_long_with_limit_a"),
+        parse_float("val_capacopercurtasemlimit").alias("capacity_short_no_limit_a"),
+        parse_float("val_capacopercurtacomlimit").alias("capacity_short_with_limit_a"),
+        parse_date("dat_entradaoperacao").alias("commissioned_on"),
+        parse_date("dat_desativacao").alias("decommissioned_on"),
+        parse_date("dat_prevista").alias("planned_on"),
+        parse_int("num_barra_de").alias("from_bus"),
+        parse_int("num_barra_para").alias("to_bus"),
+    ).with_columns(pl.lit(snapshot_date).alias("snapshot_date"))
+    valid, rejected = split_rejected(df, ["equipment_code"])
+    valid, duplicates = deduplicate(valid, ["equipment_code"])
+    return TransformResult(valid.sort("equipment_code"), rejected, duplicates)
+
+
+def transform_substations(raw: pl.DataFrame, snapshot_date: date) -> TransformResult:
+    df = raw.select(
+        parse_code("id_estacao").alias("station_id"),
+        parse_code("id_subestacao").alias("substation_id"),
+        clean_text("nom_subestacao").alias("name"),
+        parse_float("val_niveltensao").alias("voltage_kv"),
+        parse_code("id_subsistema").alias("subsystem"),
+        parse_code("id_estado").alias("state"),
+        clean_text("nom_agente_principal").alias("main_agent"),
+        parse_int("num_barra").alias("bus_number"),
+        parse_float("val_latitude").alias("latitude"),
+        parse_float("val_longitude").alias("longitude"),
+    ).with_columns(pl.lit(snapshot_date).alias("snapshot_date"))
+    valid, rejected = split_rejected(df, ["station_id"])
+    valid, duplicates = deduplicate(valid, ["station_id"])
+    return TransformResult(valid.sort("station_id"), rejected, duplicates)
+
+
+def transform_transformation_capacity(raw: pl.DataFrame, snapshot_date: date) -> TransformResult:
+    df = raw.select(
+        parse_code("cod_equipamento").alias("equipment_code"),
+        clean_text("nom_transformador").alias("name"),
+        clean_text("nom_tipotransformador").alias("transformer_type"),
+        clean_text("nom_subestacao").alias("substation"),
+        clean_text("nom_agenteproprietario").alias("owner_agent"),
+        parse_code("id_subsistema").alias("subsystem"),
+        parse_code("id_estado").alias("state"),
+        parse_float("val_tensaoprimario_kv").alias("primary_kv"),
+        parse_float("val_tensaosecundario_kv").alias("secondary_kv"),
+        parse_float("val_tensaoterciario_kv").alias("tertiary_kv"),
+        parse_float("val_potencianominal_mva").alias("rated_mva"),
+        clean_text("nom_tipoderede").alias("network_type"),
+        parse_date("dat_entradaoperacao").alias("commissioned_on"),
+        parse_date("dat_desativacao").alias("decommissioned_on"),
+        parse_int("num_barra_primario").alias("primary_bus"),
+        parse_int("num_barra_secundario").alias("secondary_bus"),
+    ).with_columns(pl.lit(snapshot_date).alias("snapshot_date"))
+    valid, rejected = split_rejected(df, ["equipment_code"])
+    valid, duplicates = deduplicate(valid, ["equipment_code"])
+    return TransformResult(valid.sort("equipment_code"), rejected, duplicates)
+
+
 def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformResult:
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),

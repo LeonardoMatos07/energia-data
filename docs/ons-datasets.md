@@ -91,7 +91,24 @@ overlap: merit order contains its above-inflexibility part, inflexibility has tw
 (embedded in merit and pure). `val_proginflexibilidadedessem` and `val_progordemdemeritoref` are
 model references, not reasons, and are not loaded.
 
+## Hydrology datasets
+
+Reservoirs (`reservatorio`, snapshot), EAR and ENA per subsystem and per reservoir (daily) and the
+hydrological data (`dados_hidrologicos_di`, daily). Units: EAR in MWmonth and percent, ENA in MWmed
+and percent of the long-term average, flows in m3/s, levels in metres, volumes in hm3. Three codes
+identify a reservoir: `cod_resplanejamento` (EAR and ENA), `res_id` / `id_reservatorio` (hydrological
+data) and `cod_usina` (spilled energy, an optimisation code). A few reservoirs have no planning
+code. Reservoir EAR is negative below the minimum operating volume (2015: down to -83%) and above
+100% while it spills (up to 379%). `energia_vertida_turbinavel_ho` has `val_energiavertida` and
+`val_energiavertidaturbinavel` in MWmed (hourly, so MWh).
+
+## Grid register datasets
+
+`linha_transmissao`, `subestacao` and `capacidade-transformacao` are snapshots of the whole register.
+Line capacities are in ampere; `val_resistencia`, `val_reatancia` and `val_shunt` are positive
+sequence values without a stated unit. The substation file carries latitude and longitude (some
+empty), which are stored as published. Transformers have `val_potencianominal_mva` in MVA.
+
 ## Still to read (next phases)
 
-Reservoirs, EAR and ENA (subsystem and reservoir),
-daily hydrological data, transmission lines, substations and transformation capacity.
+Nothing: every dataset of the spec has been read.
