@@ -63,7 +63,52 @@ power reserve (`reservapotencia`), `gsub`, `unitcommitment`, `constrainedoff`; p
 | `val_produtividade` | Productivity | MW/(m3/s) |
 | `val_energiavertida`, `val_energiavertidaturbinavel` | Spilled energy | MWmed |
 
+## `intercambio_nacional_ho` (interchange between subsystems, hourly)
+
+| Column | Description | Unit |
+|---|---|---|
+| `din_instante` | Timestamp | |
+| `id_subsistema_origem`, `id_subsistema_destino` (+ `nom_*`) | Link, in the direction of the flow of that hour | |
+| `val_intercambiomwmed` | Verified exchange (sum of the active power flows on the lines) | MWmed |
+| `val_intercambioprogmwmed` | Scheduled exchange | MWmed |
+
+The file has four links (N-NE, N-SE, NE-SE, S-SE), one row per link and hour, always with a
+magnitude (>= 0) and origin/destination swapped when the flow reverses. The silver layer fixes each
+link in alphabetical order and signs the flow: positive means origin to destination.
+
+## `intercambio_internacional_ho` (interchange with neighbouring countries, hourly)
+
+`din_instante`, `nom_paisdestino` (Argentina, Uruguai), `val_intercambiomwmed` and
+`val_intercambioprogmwmed` (MWmed). The value is the flow to the destination country (negative is
+an import); the origin is `BR`.
+
+## Thermal dispatch: notes on the real file
+
+The file has one row per plant and hour. Programmed columns are `val_prog*` and verified ones
+`val_verif*` (the verified electrical reason column is spelled `val_verifrazaoeletrica`). Some
+plants have no `cod_usinaplanejamento` yet; the pipeline then uses `CEG:<ceg>`. The reasons
+overlap: merit order contains its above-inflexibility part, inflexibility has two parts
+(embedded in merit and pure). `val_proginflexibilidadedessem` and `val_progordemdemeritoref` are
+model references, not reasons, and are not loaded.
+
+## Hydrology datasets
+
+Reservoirs (`reservatorio`, snapshot), EAR and ENA per subsystem and per reservoir (daily) and the
+hydrological data (`dados_hidrologicos_di`, daily). Units: EAR in MWmonth and percent, ENA in MWmed
+and percent of the long-term average, flows in m3/s, levels in metres, volumes in hm3. Three codes
+identify a reservoir: `cod_resplanejamento` (EAR and ENA), `res_id` / `id_reservatorio` (hydrological
+data) and `cod_usina` (spilled energy, an optimisation code). A few reservoirs have no planning
+code. Reservoir EAR is negative below the minimum operating volume (2015: down to -83%) and above
+100% while it spills (up to 379%). `energia_vertida_turbinavel_ho` has `val_energiavertida` and
+`val_energiavertidaturbinavel` in MWmed (hourly, so MWh).
+
+## Grid register datasets
+
+`linha_transmissao`, `subestacao` and `capacidade-transformacao` are snapshots of the whole register.
+Line capacities are in ampere; `val_resistencia`, `val_reatancia` and `val_shunt` are positive
+sequence values without a stated unit. The substation file carries latitude and longitude (some
+empty), which are stored as published. Transformers have `val_potencianominal_mva` in MVA.
+
 ## Still to read (next phases)
 
-Interchange (national and international), reservoirs, EAR and ENA (subsystem and reservoir),
-daily hydrological data, transmission lines, substations and transformation capacity.
+Nothing: every dataset of the spec has been read.

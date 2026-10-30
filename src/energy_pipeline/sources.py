@@ -106,6 +106,139 @@ ENERGY_BALANCE = Source(
     available_from=Period(2000, 1),
 )
 
+NATIONAL_INTERCHANGE = Source(
+    name="national_interchange",
+    ons_dataset="intercambio_nacional_ho",
+    file_pattern="INTERCAMBIO_NACIONAL_{year}.parquet",
+    partitioning=Partitioning.YEAR,
+    description="Hourly power exchanged between subsystems, in average MW (origin to destination).",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2000, 1),
+)
+
+INTERNATIONAL_INTERCHANGE = Source(
+    name="international_interchange",
+    ons_dataset="intercambio_internacional_ho",
+    file_pattern="INTERCAMBIO_INTERNACIONAL_{year}.parquet",
+    partitioning=Partitioning.YEAR,
+    description="Hourly power exchanged with neighbouring countries, in average MW.",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2000, 1),
+)
+
+THERMAL_DISPATCH = Source(
+    name="thermal_dispatch",
+    ons_dataset="geracao_termica_despacho_2_ho",
+    file_pattern="GERACAO_TERMICA_DESPACHO-2_{year}_{month:02d}.parquet",
+    yearly_file_pattern="GERACAO_TERMICA_DESPACHO-2_{year}.parquet",
+    yearly_until=Period(2021, 12),
+    partitioning=Partitioning.MONTH,
+    description="Hourly programmed and verified thermal generation per plant and dispatch reason.",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2022, 1),
+)
+
+
+def _daily(
+    name: str, dataset: str, file_name: str, description: str, available_from: Period
+) -> Source:
+    return Source(
+        name=name,
+        ons_dataset=dataset,
+        file_pattern=file_name + "_{year}.parquet",
+        partitioning=Partitioning.YEAR,
+        description=description,
+        file_format=FileFormat.PARQUET,
+        available_from=available_from,
+    )
+
+
+# The ONS keeps the daily hydrology since 2000 (EAR, ENA) and 1970 (hydrological data); the first
+# backfill starts in 2015, the rest is a separate run (move available_from back to load it).
+HYDRO_START = Period(2015, 1)
+
+RESERVOIRS = Source(
+    name="reservoirs",
+    ons_dataset="reservatorio",
+    file_pattern="RESERVATORIOS.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Reservoir register: basin, river, levels, volumes and location.",
+    file_format=FileFormat.PARQUET,
+)
+SUBSYSTEM_STORAGE = _daily(
+    "subsystem_storage",
+    "ear_subsistema_di",
+    "EAR_DIARIO_SUBSISTEMA",
+    "Daily stored energy (EAR) per subsystem, in MW-month and percent.",
+    HYDRO_START,
+)
+SUBSYSTEM_INFLOW = _daily(
+    "subsystem_inflow",
+    "ena_subsistema_di",
+    "ENA_DIARIO_SUBSISTEMA",
+    "Daily natural inflow energy (ENA) per subsystem, in average MW and percent of the MLT.",
+    HYDRO_START,
+)
+RESERVOIR_STORAGE = _daily(
+    "reservoir_storage",
+    "ear_reservatorio_di",
+    "EAR_DIARIO_RESERVATORIOS",
+    "Daily stored energy (EAR) per reservoir.",
+    HYDRO_START,
+)
+RESERVOIR_INFLOW = _daily(
+    "reservoir_inflow",
+    "ena_reservatorio_di",
+    "ENA_DIARIO_RESERVATORIOS",
+    "Daily natural inflow energy (ENA) per reservoir.",
+    HYDRO_START,
+)
+HYDRO_OPERATIONS = _daily(
+    "hydro_operations",
+    "dados_hidrologicos_di",
+    "DADOS_HIDROLOGICOS_RES",
+    "Daily flows (inflow, outflow, turbined, spilled) and levels per reservoir.",
+    HYDRO_START,
+)
+SPILLED_TURBINABLE_ENERGY = Source(
+    name="spilled_turbinable_energy",
+    ons_dataset="energia_vertida_turbinavel_ho",
+    file_pattern="ENERGIA_VERTIDA_TURBINAVEL_{year}_{month:02d}.parquet",
+    yearly_file_pattern="ENERGIA_VERTIDA_TURBINAVEL_{year}.parquet",
+    yearly_until=Period(2023, 12),  # 2024 has both files: use the monthly ones
+    partitioning=Partitioning.MONTH,
+    description="Hourly energy spilled by hydro plants that could have been turbined.",
+    file_format=FileFormat.PARQUET,
+    available_from=HYDRO_START,
+)
+
+TRANSMISSION_LINES = Source(
+    name="transmission_lines",
+    ons_dataset="linha_transmissao",
+    file_pattern="LINHA_TRANSMISSAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the transmission lines of the grid.",
+    file_format=FileFormat.PARQUET,
+)
+
+SUBSTATIONS = Source(
+    name="substations",
+    ons_dataset="subestacao",
+    file_pattern="SUBESTACAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the substations (stations by voltage level), with coordinates.",
+    file_format=FileFormat.PARQUET,
+)
+
+TRANSFORMATION_CAPACITY = Source(
+    name="transformation_capacity",
+    ons_dataset="capacidade-transformacao",
+    file_pattern="CAPACIDADE_TRANSFORMACAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the transformers of the basic grid, with rated power.",
+    file_format=FileFormat.PARQUET,
+)
+
 GENERATION_CAPACITY = Source(
     name="generation_capacity",
     ons_dataset="capacidade-geracao",
@@ -178,7 +311,25 @@ def _registry(*sources: Source) -> dict[str, Source]:
 
 
 GRID_SOURCES = _registry(LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
-SYSTEM_SOURCES = _registry(ENERGY_BALANCE, LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
+SYSTEM_SOURCES = _registry(
+    ENERGY_BALANCE,
+    LOAD_CURVE,
+    PLANT_GENERATION,
+    GENERATION_CAPACITY,
+    NATIONAL_INTERCHANGE,
+    INTERNATIONAL_INTERCHANGE,
+    THERMAL_DISPATCH,
+)
+HYDROLOGY_SOURCES = _registry(
+    RESERVOIRS,
+    SUBSYSTEM_STORAGE,
+    SUBSYSTEM_INFLOW,
+    RESERVOIR_STORAGE,
+    RESERVOIR_INFLOW,
+    HYDRO_OPERATIONS,
+    SPILLED_TURBINABLE_ENERGY,
+)
+GRID_ASSET_SOURCES = _registry(TRANSMISSION_LINES, SUBSTATIONS, TRANSFORMATION_CAPACITY)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
     GENERATION_CAPACITY,
@@ -191,5 +342,13 @@ PIPELINES: dict[str, dict[str, Source]] = {
     "grid": GRID_SOURCES,
     "curtailment": CURTAILMENT_SOURCES,
     "system": SYSTEM_SOURCES,
+    "hydrology": HYDROLOGY_SOURCES,
+    "grid_assets": GRID_ASSET_SOURCES,
 }
-SOURCES: dict[str, Source] = {**GRID_SOURCES, **CURTAILMENT_SOURCES, **SYSTEM_SOURCES}
+SOURCES: dict[str, Source] = {
+    **GRID_SOURCES,
+    **CURTAILMENT_SOURCES,
+    **SYSTEM_SOURCES,
+    **HYDROLOGY_SOURCES,
+    **GRID_ASSET_SOURCES,
+}
