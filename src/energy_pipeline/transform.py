@@ -366,6 +366,9 @@ def transform_hydro_operations(raw: pl.DataFrame, period: Period) -> TransformRe
     )
 
 
+MAX_SPILLED_ENERGY_MWH_PER_HOUR = 1_000_000
+
+
 def transform_spilled_turbinable_energy(raw: pl.DataFrame, period: Period) -> TransformResult:
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),
@@ -378,8 +381,15 @@ def transform_spilled_turbinable_energy(raw: pl.DataFrame, period: Period) -> Tr
         parse_float("val_energiavertida").alias("spilled_energy_mwh"),
         parse_float("val_energiavertidaturbinavel").alias("spilled_turbinable_energy_mwh"),
     ).filter(in_period_or_unparsed("measured_at", period))
+    # an hour of spill cannot be worth more than 1 TWh: such rows are data errors, quarantined
+    absurd = (pl.col("spilled_energy_mwh").abs() > MAX_SPILLED_ENERGY_MWH_PER_HOUR) | (
+        pl.col("spilled_turbinable_energy_mwh").abs() > MAX_SPILLED_ENERGY_MWH_PER_HOUR
+    )
     valid, rejected = split_rejected(
-        df, ["measured_at", "plant_code", "plant_name", "spilled_turbinable_energy_mwh"]
+        df.with_columns(
+            pl.when(absurd).then(None).otherwise(pl.col("plant_code")).alias("plant_code")
+        ),
+        ["measured_at", "plant_code", "plant_name", "spilled_turbinable_energy_mwh"],
     )
     valid, duplicates = deduplicate(valid, ["plant_code", "measured_at"])
     return TransformResult(valid.sort("plant_code", "measured_at"), rejected, duplicates)
