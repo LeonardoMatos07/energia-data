@@ -181,6 +181,7 @@ def every_day_has_all(df: pl.DataFrame, key: str, expected: set[str]) -> CheckRe
 
 
 MAX_STORAGE_PCT = 100.0
+MAX_NEGATIVE_ENA_MW = 25_000.0
 MAX_RESERVOIR_STORAGE_PCT = 200.0
 MAX_ENERGY_MW = 500_000
 ENA_NOISE_MW = 50.0
@@ -200,7 +201,10 @@ def subsystem_storage_checks(
         within_days(df, "day", period),
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
         every_day_has_all(df, "subsystem_id", SUBSYSTEMS),
-        between(df, "storage_pct", 0, MAX_STORAGE_PCT),
+        # Early years (2000s) publish a few days above 100% (capacity revisions): warn, block only
+        # on values that cannot be physical.
+        between(df, "storage_pct", 0, 2 * MAX_STORAGE_PCT),
+        between(df, "storage_pct", 0, MAX_STORAGE_PCT, Severity.WARN),
         between(df, "storage_mw_month", 0, MAX_ENERGY_MW),
         between(df, "storage_max_mw_month", 0, MAX_ENERGY_MW),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
@@ -219,7 +223,10 @@ def subsystem_inflow_checks(
         accepted_values(df, "subsystem_id", SUBSYSTEMS),
         every_day_has_all(df, "subsystem_id", SUBSYSTEMS),
         between(df, "ena_gross_mw_avg", 0, MAX_ENERGY_MW),
-        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW),
+        # Naturalised inflow can come out slightly negative in old years: warn, block only on
+        # values that cannot be physical.
+        between(df, "ena_storable_mw_avg", -MAX_NEGATIVE_ENA_MW, MAX_ENERGY_MW),
+        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW, Severity.WARN),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 
@@ -253,7 +260,10 @@ def reservoir_inflow_checks(
         within_days(df, "day", period),
         # derived from natural flows, it drifts slightly below zero (seen: -6.8 MW in 2024)
         between(df, "ena_gross_mw_avg", -ENA_NOISE_MW, MAX_ENERGY_MW),
-        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW),
+        # Naturalised inflow can come out slightly negative in old years: warn, block only on
+        # values that cannot be physical.
+        between(df, "ena_storable_mw_avg", -MAX_NEGATIVE_ENA_MW, MAX_ENERGY_MW),
+        between(df, "ena_storable_mw_avg", 0, MAX_ENERGY_MW, Severity.WARN),
         ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
     ]
 
