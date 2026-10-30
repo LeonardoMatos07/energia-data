@@ -281,3 +281,161 @@ def test_run_publish_dispatches_the_system_pipeline(monkeypatch):
     steps.run_publish(Period(2024, 2), settings=None, pipeline="system")  # type: ignore[arg-type]
 
     assert seen == [Period(2024, 2)]
+
+
+def raw_national() -> pl.DataFrame:
+    return raw_frame(
+        "din_instante;id_subsistema_origem;nom_subsistema_origem;id_subsistema_destino;"
+        "nom_subsistema_destino;val_intercambiomwmed;val_intercambioprogmwmed",
+        "2024-02-01 00:00:00;NE; NORDESTE;SE; SUDESTE;1500,5;1400",
+        "2024-02-01 00:00:00;NE; NORDESTE;SE; SUDESTE;1;1",
+        "2024-02-01 01:00:00;SE; SUDESTE;NE; NORDESTE;20;",
+        "2024-02-01 01:00:00;;;SE; SUDESTE;5;5",
+        "2024-03-01 00:00:00;N; NORTE;NE; NORDESTE;5;5",
+    )
+
+
+def test_national_interchange_keeps_direction_and_signs():
+    result = transform.transform_national_interchange(raw_national(), FEBRUARY)
+
+    assert result.valid.height == 2
+    assert result.duplicates_removed == 1
+    assert result.rejected.height == 1
+    # SE -> NE of 20 MW is stored as the fixed link NE -> SE with a negative sign
+    reverse = result.valid.filter(pl.col("measured_at").dt.hour() == 1).row(0, named=True)
+    assert (reverse["origin"], reverse["destination"]) == ("NE", "SE")
+    assert reverse["flow_mw_avg"] == -20.0
+    assert reverse["scheduled_mw_avg"] is None
+    forward = result.valid.filter(pl.col("measured_at").dt.hour() == 0).row(0, named=True)
+    assert forward["flow_mw_avg"] == 1.0  # the later duplicate wins
+
+
+def test_international_interchange_names_the_country():
+    raw = raw_frame(
+        "din_instante;nom_paisdestino;val_intercambiomwmed;val_intercambioprogmwmed",
+        "2024-02-01 00:00:00;Argentina                     ;-15,5;0",
+        "2024-02-01 01:00:00;Uruguai                       ;40;40",
+    )
+
+    result = transform.transform_international_interchange(raw, FEBRUARY)
+
+    assert result.valid["destination"].to_list() == ["ARGENTINA", "URUGUAI"]
+    assert set(result.valid["origin"]) == {"BR"}
+
+
+def interchange_silver(scope_origin: str, destination: str, flows: list[float]) -> pl.DataFrame:
+    moments = [FEBRUARY.start + timedelta(hours=h) for h in range(len(flows))]
+    return pl.DataFrame(
+        {
+            "measured_at": moments,
+            "measured_at_utc": [m + timedelta(hours=3) for m in moments],
+            "origin": [scope_origin] * len(flows),
+            "destination": [destination] * len(flows),
+            "flow_mw_avg": flows,
+            "scheduled_mw_avg": [1.0] * len(flows),
+        }
+    )
+
+
+def test_interchange_gold_has_hourly_and_monthly_rows_for_both_scopes():
+    national = interchange_silver("NE", "SE", [100.0, -20.0, 60.0])
+    international = interchange_silver("BR", "ARGENTINA", [-10.0, -10.0])
+
+    hourly, monthly = system.build_interchange(FEBRUARY, national, international)  # type: ignore[misc]
+
+    assert hourly.height == 5
+    assert set(hourly["scope"]) == {"national", "international"}
+    row = monthly.filter(pl.col("destination") == "SE").row(0, named=True)
+    assert row["energy_mwh"] == 140.0
+    assert row["peak_mw"] == 100.0 and row["min_mw"] == -20.0
+    assert row["avg_mw"] == round(140.0 / FEBRUARY.hours, 3)
+    assert system.build_interchange(FEBRUARY, None, None) is None
+
+
+def test_interchange_checks():
+    results = quality.interchange_checks(
+        interchange_silver("NE", "SE", [1.0] * FEBRUARY.hours), FEBRUARY, 0, 0.01
+    )
+    assert all(result.passed for result in results)
+
+    huge = interchange_silver("NE", "SE", [1.0] * FEBRUARY.hours).with_columns(
+        pl.lit(90_000.0).alias("flow_mw_avg")
+    )
+    assert any(not r.passed for r in quality.interchange_checks(huge, FEBRUARY, 0, 0.01))
+
+
+def raw_thermal() -> pl.DataFrame:
+    columns = ["din_instante", "id_subsistema", "nom_usina", "cod_usinaplanejamento", "ceg"]
+    columns += ["nom_combustivel"]
+    reason_columns = [c for pair in schema.THERMAL_REASON_COLUMNS.values() for c in pair]
+    header = ";".join(columns + reason_columns)
+
+    def line(hour: int, code: str, total: str, merit: str) -> str:
+        values = [f"2024-02-01 {hour:02d}:00:00", "N", "Aparecida", code, "UTE.GN.AM.1", "Gás"]
+        for _programmed, verified in schema.THERMAL_REASON_COLUMNS.values():
+            if verified == "val_verifgeracao":
+                values += [total, total]
+            elif verified == "val_verifordemmerito":
+                values += [merit, merit]
+            else:
+                values += ["0", "0"]
+        return ";".join(values)
+
+    return raw_frame(
+        header,
+        line(0, "201", "146", "100"),
+        line(1, "201", "150", "120"),
+        line(1, "201", "151", "121"),
+        line(2, "", "1", "1"),
+    )
+
+
+def test_thermal_dispatch_keeps_programmed_and_verified_per_reason():
+    result = transform.transform_thermal_dispatch(raw_thermal(), FEBRUARY)
+
+    assert result.valid.height == 3 and result.rejected.height == 0
+    assert result.duplicates_removed == 1
+    assert "programmed_merit_order_mwh" in result.valid.columns
+    assert "verified_electrical_reason_mwh" in result.valid.columns
+    assert set(result.valid["fuel_type"]) == {"GAS"}
+    assert "CEG:UTE.GN.AM.1" in set(result.valid["plant_code"])
+
+
+def test_thermal_plant_without_planning_code_falls_back_to_the_ceg():
+    raw = raw_thermal().with_columns(pl.lit("").alias("cod_usinaplanejamento"))
+
+    result = transform.transform_thermal_dispatch(raw, FEBRUARY)
+
+    assert set(result.valid["plant_code"]) == {"CEG:UTE.GN.AM.1"}
+    assert result.rejected.height == 0
+
+
+def test_thermal_dispatch_gold_is_long_and_drops_empty_reasons():
+    silver = transform.transform_thermal_dispatch(raw_thermal(), FEBRUARY).valid
+    table = system.build_thermal_monthly(FEBRUARY, silver)
+
+    assert set(table["reason"]) == {"total", "merit_order"}  # every other reason is all zero
+    total = table.filter(pl.col("reason") == "total").row(0, named=True)
+    assert total["verified_mwh"] == 146.0 + 151.0
+    assert total["plant_code"] == "201" and total["subsystem"] == "N"
+    assert table.columns == [
+        "month",
+        "plant_code",
+        "reason",
+        "plant_name",
+        "ceg",
+        "fuel_type",
+        "subsystem",
+        "verified_mwh",
+        "programmed_mwh",
+    ]
+
+
+def test_phase_two_sources_are_in_the_system_pipeline():
+    assert {"national_interchange", "international_interchange", "thermal_dispatch"} <= set(
+        PIPELINES["system"]
+    )
+    assert SOURCES["thermal_dispatch"].file_name(Period(2022, 3)).endswith("2022_03.parquet")
+    assert (
+        SOURCES["thermal_dispatch"].file_name(Period(2021, 3)).endswith("DESPACHO-2_2021.parquet")
+    )

@@ -8,6 +8,7 @@ import polars as pl
 
 from energy_pipeline.period import Period
 from energy_pipeline.publish import make_slug
+from energy_pipeline.schema import THERMAL_REASON_COLUMNS
 
 GENERATION_SOURCES = ("hydro", "thermal", "wind", "solar")
 MAX_CAPACITY_FACTOR = 1.05
@@ -21,6 +22,9 @@ class SystemTables:
     monthly_generation: pl.DataFrame | None = None
     power_plant: pl.DataFrame | None = None
     plant_monthly: pl.DataFrame | None = None
+    interchange_hourly: pl.DataFrame | None = None
+    interchange_monthly: pl.DataFrame | None = None
+    thermal_monthly: pl.DataFrame | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -211,14 +215,117 @@ def cross_check(balance_monthly: pl.DataFrame, plants: pl.DataFrame) -> list[str
     return messages
 
 
+def build_interchange(
+    period: Period, national: pl.DataFrame | None, international: pl.DataFrame | None
+) -> tuple[pl.DataFrame, pl.DataFrame] | None:
+    """Hourly and monthly interchange; positive means origin to destination (ONS convention)."""
+    frames = [
+        df.with_columns(pl.lit(scope).alias("scope")).select(
+            "measured_at",
+            "measured_at_utc",
+            "origin",
+            "destination",
+            "scope",
+            "flow_mw_avg",
+            "scheduled_mw_avg",
+        )
+        for scope, df in (("national", national), ("international", international))
+        if df is not None
+    ]
+    if not frames:
+        return None
+    stacked = pl.concat(frames)
+    hourly = stacked.select(
+        pl.col("measured_at").alias("hour"),
+        "origin",
+        "destination",
+        "scope",
+        pl.col("measured_at_utc").alias("hour_utc"),
+        "flow_mw_avg",
+        "scheduled_mw_avg",
+    ).sort("scope", "origin", "destination", "hour")
+    monthly = (
+        stacked.filter(pl.col("flow_mw_avg").is_not_null())
+        .group_by("scope", "origin", "destination")
+        .agg(
+            pl.col("flow_mw_avg").sum().alias("energy_mwh"),
+            pl.col("scheduled_mw_avg").sum().alias("scheduled_energy_mwh"),
+            pl.col("flow_mw_avg").max().alias("peak_mw"),
+            pl.col("flow_mw_avg").min().alias("min_mw"),
+        )
+        .with_columns((pl.col("energy_mwh") / period.hours).alias("avg_mw"))
+        .with_columns(pl.col("energy_mwh", "scheduled_energy_mwh", "avg_mw").round(3))
+        .select(
+            pl.lit(period.start.date()).alias("month"),
+            "origin",
+            "destination",
+            "scope",
+            "energy_mwh",
+            "scheduled_energy_mwh",
+            "avg_mw",
+            "peak_mw",
+            "min_mw",
+        )
+        .sort("scope", "origin", "destination")
+    )
+    return hourly, monthly
+
+
+def build_thermal_monthly(period: Period, thermal: pl.DataFrame) -> pl.DataFrame:
+    """One row per plant and dispatch reason, in MWh (the file is hourly MWmed)."""
+    sums = [
+        pl.col(f"{kind}_{reason}_mwh").sum().alias(f"{kind}_{reason}_mwh")
+        for reason in THERMAL_REASON_COLUMNS
+        for kind in ("programmed", "verified")
+    ]
+    per_plant = (
+        thermal.sort("measured_at")
+        .group_by("plant_code")
+        .agg(
+            pl.col("plant_name").last(),
+            pl.col("ceg").last(),
+            pl.col("fuel_type").last(),
+            pl.col("subsystem_id").last().alias("subsystem"),
+            *sums,
+        )
+    )
+    long = [
+        per_plant.select(
+            pl.lit(period.start.date()).alias("month"),
+            "plant_code",
+            pl.lit(reason).alias("reason"),
+            "plant_name",
+            "ceg",
+            "fuel_type",
+            "subsystem",
+            pl.col(f"verified_{reason}_mwh").round(3).alias("verified_mwh"),
+            pl.col(f"programmed_{reason}_mwh").round(3).alias("programmed_mwh"),
+        )
+        for reason in THERMAL_REASON_COLUMNS
+    ]
+    table = pl.concat(long)
+    keep = (
+        (pl.col("reason") == "total")
+        | (pl.col("verified_mwh") != 0)
+        | (pl.col("programmed_mwh") != 0)
+    )
+    return table.filter(keep).sort("plant_code", "reason")
+
+
 def build_system_tables(
     period: Period,
     balance: pl.DataFrame | None,
     plants: pl.DataFrame | None,
     capacity: pl.DataFrame | None,
+    *,
+    national: pl.DataFrame | None = None,
+    international: pl.DataFrame | None = None,
+    thermal: pl.DataFrame | None = None,
 ) -> SystemTables:
     warnings: list[str] = []
     hourly = monthly = power_plant = plant_monthly = None
+    interchange = build_interchange(period, national, international)
+    thermal_monthly = build_thermal_monthly(period, thermal) if thermal is not None else None
     if balance is not None:
         hourly = build_hourly_balance(balance)
         monthly = build_monthly_generation(period, balance)
@@ -229,4 +336,13 @@ def build_system_tables(
             warnings.append(f"{implausible} plants above capacity factor {MAX_CAPACITY_FACTOR}")
         if monthly is not None:
             warnings.extend(cross_check(monthly, plants))
-    return SystemTables(hourly, monthly, power_plant, plant_monthly, warnings)
+    return SystemTables(
+        hourly,
+        monthly,
+        power_plant,
+        plant_monthly,
+        interchange[0] if interchange else None,
+        interchange[1] if interchange else None,
+        thermal_monthly,
+        warnings,
+    )
