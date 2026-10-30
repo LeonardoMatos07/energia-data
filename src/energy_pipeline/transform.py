@@ -145,6 +145,25 @@ def transform_load_curve(raw: pl.DataFrame, period: Period) -> TransformResult:
     return TransformResult(valid.sort("subsystem_id", "measured_at"), rejected, duplicates)
 
 
+def transform_energy_balance(raw: pl.DataFrame, period: Period) -> TransformResult:
+    df = raw.select(
+        parse_code("id_subsistema").alias("subsystem_id"),
+        clean_text("nom_subsistema").alias("subsystem_name"),
+        parse_timestamp("din_instante").alias("measured_at"),
+        parse_float("val_gerhidraulica").alias("hydro_mw_avg"),
+        parse_float("val_gertermica").alias("thermal_mw_avg"),
+        parse_float("val_gereolica").alias("wind_mw_avg"),
+        parse_float("val_gersolar").alias("solar_mw_avg"),
+        parse_float("val_carga").alias("load_mw_avg"),
+        parse_float("val_intercambio").alias("net_interchange_mw_avg"),
+    ).filter(in_period_or_unparsed("measured_at", period))
+    df = normalize_labels(df, ["subsystem_name"])
+
+    valid, rejected = split_rejected(df, ["subsystem_id", "measured_at"])
+    valid, duplicates = deduplicate(valid, ["subsystem_id", "measured_at"])
+    return TransformResult(valid.sort("subsystem_id", "measured_at"), rejected, duplicates)
+
+
 def transform_plant_generation(raw: pl.DataFrame, period: Period) -> TransformResult:
     df = raw.select(
         parse_timestamp("din_instante").alias("measured_at"),

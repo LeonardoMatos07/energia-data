@@ -96,6 +96,16 @@ PLANT_GENERATION = Source(
     available_from=Period(2022, 1),
 )
 
+ENERGY_BALANCE = Source(
+    name="energy_balance",
+    ons_dataset="balanco_energia_subsistema_ho",
+    file_pattern="BALANCO_ENERGIA_SUBSISTEMA_{year}.parquet",
+    partitioning=Partitioning.YEAR,
+    description="Hourly energy balance per subsystem: generation by source, load, interchange.",
+    file_format=FileFormat.PARQUET,
+    available_from=Period(2000, 1),
+)
+
 GENERATION_CAPACITY = Source(
     name="generation_capacity",
     ons_dataset="capacidade-geracao",
@@ -168,6 +178,7 @@ def _registry(*sources: Source) -> dict[str, Source]:
 
 
 GRID_SOURCES = _registry(LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
+SYSTEM_SOURCES = _registry(ENERGY_BALANCE, LOAD_CURVE, PLANT_GENERATION, GENERATION_CAPACITY)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
     GENERATION_CAPACITY,
@@ -179,5 +190,6 @@ CURTAILMENT_SOURCES = _registry(
 PIPELINES: dict[str, dict[str, Source]] = {
     "grid": GRID_SOURCES,
     "curtailment": CURTAILMENT_SOURCES,
+    "system": SYSTEM_SOURCES,
 }
-SOURCES: dict[str, Source] = {**GRID_SOURCES, **CURTAILMENT_SOURCES}
+SOURCES: dict[str, Source] = {**GRID_SOURCES, **CURTAILMENT_SOURCES, **SYSTEM_SOURCES}
