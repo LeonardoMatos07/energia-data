@@ -11,6 +11,7 @@ import polars as pl
 from energy_pipeline import (
     curtailment,
     extract,
+    first_seen,
     grid_assets,
     hydrology,
     notify,
@@ -459,6 +460,13 @@ def run_publish_hydrology(period: Period, settings: Settings) -> Manifest:
     if reservoirs is None and all(df is None for df in inputs.values()):
         log.info("No hydrology data for %s; nothing to publish", period)
         return {"period": str(period), "published": False}
+
+    if inputs["operations"] is not None:
+        key = first_seen.LAKE_KEY
+        previous = lake.read_parquet(key) if lake.metadata(key) else None
+        lake.write_parquet(
+            first_seen.update_first_seen(previous, inputs["operations"], _now()), key
+        )
 
     tables = hydrology.build_hydrology_tables(period, reservoirs=reservoirs, **inputs)
     outputs = {

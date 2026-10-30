@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Data pipelines of the platform: ONS ingestion, data lake and aggregate loading"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["polars==1.20.0", "pyyaml==6.0.3", "selectolax==0.3.29"]
+dependencies = [
+    "numcodecs==0.15.1",
+    "numpy==2.2.6",
+    "polars==1.20.0",
+    "pyyaml==6.0.3",
+    "selectolax==0.3.29",
+]
 
 [project.optional-dependencies]
 local = [
@@ -53,5 +59,5 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["boto3", "boto3.*", "botocore", "botocore.*"]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "numcodecs", "numcodecs.*"]
 ignore_missing_imports = true

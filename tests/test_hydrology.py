@@ -17,7 +17,9 @@ def test_hydrology_sources_and_file_patterns():
     spilled = SOURCES["spilled_turbinable_energy"]
     assert spilled.file_name(Period(2023, 5)) == "ENERGIA_VERTIDA_TURBINAVEL_2023.parquet"
     assert spilled.file_name(Period(2024, 5)) == "ENERGIA_VERTIDA_TURBINAVEL_2024_05.parquet"
-    assert SOURCES["hydro_operations"].available_from == Period(2015, 1)
+    assert SOURCES["hydro_operations"].available_from == Period(2000, 1)
+    assert SOURCES["reservoir_inflow"].available_from == Period(2000, 1)
+    assert SOURCES["spilled_turbinable_energy"].available_from == Period(2015, 1)
 
 
 def raw_storage() -> pl.DataFrame:

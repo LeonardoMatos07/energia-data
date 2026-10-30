@@ -43,3 +43,16 @@ O que falta, e o que você precisa fazer: pedir ao INMET, pelos canais do portal
 ## Tabelas previstas (só quando houver fonte liberada)
 
 `irradiance_point` (ponto, latitude, longitude) e `irradiance_monthly` (ponto × mês × GHI, direta, difusa em kWh/m²/dia, com a variante da fonte). `weather_station` e `weather_hourly` só se o INMET liberar.
+
+## IMERG diário (chuva para a previsão de afluência), conferido em 30/10/2026
+
+| Item | Resultado |
+|---|---|
+| Conjunto | `s3://nasa-power/imerg/temporal/power_imerg_daily_temporal_utc.zarr`, variável `IMERG_PRECTOT` (mm/dia), grade de 0,1 grau, dia em UTC |
+| Licença | CC BY 4.0 (`LICENSE.txt` do bucket). Citar POWER e IMERG (doi:10.5067/GPM/IMERGDF/DAY/07). Texto em `energy_pipeline.rain.ATTRIBUTION` |
+| Acesso | HTTPS anônimo no bucket; sem conta, sem chave. A API REST do POWER não é usada (robots.txt proíbe `/api/`) |
+| Leitura | `energy_pipeline.rain`: lê só os blocos Zarr necessários (blosc + fixedscaleoffset, `numcodecs`), média de janela 3 x 3 pixels ao redor da barragem |
+| **Atraso real** | O `last_available.json` diz 2026-10-28, mas o Zarr analisado só tem dados **até 2026-09-14** (bloco modificado em 16/09; mesmo fim em 4 pontos testados). Atraso efetivo de cerca de 46 dias. Os últimos dias de chuva faltam no serviço diário |
+| Final x Late | Dias com menos de 120 dias de idade são marcados `late`; cada linha guarda `first_seen_at` e `first_precip_mm` para medir a diferença quando o valor Final chegar |
+
+Consequência para o serviço: sem chuva dos últimos cerca de 46 dias, o modelo diário não pode depender dela como entrada de origem. Decisão pendente do dono (ver relatório do forecast): treinar e operar apenas com as vazões, ou achar uma segunda fonte de menor atraso (GPM IMERG Late no GES DISC exige conta Earthdata).
