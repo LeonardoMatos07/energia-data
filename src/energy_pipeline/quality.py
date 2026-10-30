@@ -335,6 +335,62 @@ def thermal_dispatch_checks(
     ]
 
 
+GRID_SUBSYSTEMS = SUBSYSTEMS | {"PY", "AR", "UY", "VE"}
+MAX_LINE_KV = 1_200
+MAX_LINE_KM = 3_000
+MAX_TRANSFORMER_MVA = 3_000
+BRAZIL_LATITUDE = (-34.0, 6.0)
+BRAZIL_LONGITUDE = (-75.0, -28.0)
+
+
+def transmission_lines_checks(
+    df: pl.DataFrame, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["equipment_code"]),
+        unique(df, ["equipment_code"]),
+        between(df, "voltage_kv", 0, MAX_LINE_KV),
+        between(df, "length_km", 0, MAX_LINE_KM),
+        between(df, "capacity_long_no_limit_a", 0, 20_000),
+        accepted_values(df, "from_subsystem", GRID_SUBSYSTEMS, Severity.WARN),
+        accepted_values(df, "to_subsystem", GRID_SUBSYSTEMS, Severity.WARN),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def substations_checks(
+    df: pl.DataFrame, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["station_id"]),
+        unique(df, ["station_id"]),
+        between(df, "voltage_kv", 0, MAX_LINE_KV),
+        accepted_values(df, "subsystem", SUBSYSTEMS),
+        between(df, "latitude", *BRAZIL_LATITUDE, Severity.WARN),
+        between(df, "longitude", *BRAZIL_LONGITUDE, Severity.WARN),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
+def transformation_capacity_checks(
+    df: pl.DataFrame, rejected_rows: int, max_rejected_ratio: float
+) -> list[CheckResult]:
+    total = df.height + rejected_rows
+    return [
+        not_empty(df),
+        no_nulls(df, ["equipment_code"]),
+        unique(df, ["equipment_code"]),
+        between(df, "rated_mva", 0, MAX_TRANSFORMER_MVA),
+        between(df, "primary_kv", 0, MAX_LINE_KV),
+        accepted_values(df, "subsystem", SUBSYSTEMS),
+        ratio_at_most("rejected_rows", rejected_rows, total, max_rejected_ratio),
+    ]
+
+
 def plant_generation_checks(
     df: pl.DataFrame,
     period: Period,

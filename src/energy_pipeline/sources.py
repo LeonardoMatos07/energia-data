@@ -212,6 +212,33 @@ SPILLED_TURBINABLE_ENERGY = Source(
     available_from=HYDRO_START,
 )
 
+TRANSMISSION_LINES = Source(
+    name="transmission_lines",
+    ons_dataset="linha_transmissao",
+    file_pattern="LINHA_TRANSMISSAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the transmission lines of the grid.",
+    file_format=FileFormat.PARQUET,
+)
+
+SUBSTATIONS = Source(
+    name="substations",
+    ons_dataset="subestacao",
+    file_pattern="SUBESTACAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the substations (stations by voltage level), with coordinates.",
+    file_format=FileFormat.PARQUET,
+)
+
+TRANSFORMATION_CAPACITY = Source(
+    name="transformation_capacity",
+    ons_dataset="capacidade-transformacao",
+    file_pattern="CAPACIDADE_TRANSFORMACAO.parquet",
+    partitioning=Partitioning.SNAPSHOT,
+    description="Register of the transformers of the basic grid, with rated power.",
+    file_format=FileFormat.PARQUET,
+)
+
 GENERATION_CAPACITY = Source(
     name="generation_capacity",
     ons_dataset="capacidade-geracao",
@@ -302,6 +329,7 @@ HYDROLOGY_SOURCES = _registry(
     HYDRO_OPERATIONS,
     SPILLED_TURBINABLE_ENERGY,
 )
+GRID_ASSET_SOURCES = _registry(TRANSMISSION_LINES, SUBSTATIONS, TRANSFORMATION_CAPACITY)
 CURTAILMENT_SOURCES = _registry(
     MARGINAL_COST,
     GENERATION_CAPACITY,
@@ -315,10 +343,12 @@ PIPELINES: dict[str, dict[str, Source]] = {
     "curtailment": CURTAILMENT_SOURCES,
     "system": SYSTEM_SOURCES,
     "hydrology": HYDROLOGY_SOURCES,
+    "grid_assets": GRID_ASSET_SOURCES,
 }
 SOURCES: dict[str, Source] = {
     **GRID_SOURCES,
     **CURTAILMENT_SOURCES,
     **SYSTEM_SOURCES,
     **HYDROLOGY_SOURCES,
+    **GRID_ASSET_SOURCES,
 }
